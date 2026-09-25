@@ -16,6 +16,10 @@ describe('changedPaths', () => {
     expect(changedPaths({ a: { b: [1] } }, { a: { b: [1] } })).toEqual([])
   })
 
+  test('treats null as a leaf value', () => {
+    expect(changedPaths({ a: null }, { a: { b: 1 } })).toEqual(['a'])
+  })
+
   test('returns root when shape changes at the top', () => {
     expect(changedPaths(undefined, { a: 1 })).toEqual([''])
   })

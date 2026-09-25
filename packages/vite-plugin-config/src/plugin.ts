@@ -1,13 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
-import {
-  loadEnv,
-  type ModuleNode,
-  type Plugin,
-  type ResolvedConfig,
-  type ViteDevServer,
-} from 'vite'
+import { loadEnv, type ModuleNode, type Plugin, type ViteDevServer } from 'vite'
 import { type ZodType, z } from 'zod'
 
 import { changedPaths, matchesAny } from './changed-paths'
@@ -44,7 +38,7 @@ export function senateConfig(options: SenateConfigOptions = {}): Plugin {
   const privateEnvVar = options.privateEnvVar ?? 'APP_PRIVATE_CONFIG'
   const globalKey = options.globalKey ?? '__CONFIG__'
 
-  let resolved: ResolvedConfig
+  let command: 'serve' | 'build'
   let reader: ReturnType<typeof createDevReader> | undefined
   let state: DevState | undefined
 
@@ -92,6 +86,7 @@ export function senateConfig(options: SenateConfigOptions = {}): Plugin {
     name: 'senate-config',
 
     config(userConfig, env) {
+      command = env.command
       const root = path.resolve(userConfig.root ?? process.cwd())
       if (env.command === 'serve') {
         reader = createDevReader(options, root)
@@ -132,10 +127,6 @@ export function senateConfig(options: SenateConfigOptions = {}): Plugin {
       }
     },
 
-    configResolved(config) {
-      resolved = config
-    },
-
     configureServer(server) {
       if (options.watch === false || !reader) return
       const watched = new Set(reader.watchedFiles)
@@ -160,7 +151,7 @@ export function senateConfig(options: SenateConfigOptions = {}): Plugin {
 
     load(id) {
       if (id === RESOLVED_PUBLIC_ID) {
-        if (resolved.command === 'serve' && state) {
+        if (state) {
           return staticSourceModule(state.public, state.origin)
         }
         return [
@@ -172,7 +163,7 @@ export function senateConfig(options: SenateConfigOptions = {}): Plugin {
       }
 
       if (id === RESOLVED_PRIVATE_ID) {
-        if (resolved.command === 'serve' && state) {
+        if (state) {
           return staticSourceModule(state.server, state.origin)
         }
         return [
@@ -193,7 +184,7 @@ export function senateConfig(options: SenateConfigOptions = {}): Plugin {
     },
 
     transformIndexHtml() {
-      if (resolved.command !== 'build') return
+      if (command !== 'build') return
       return [
         {
           tag: 'script',

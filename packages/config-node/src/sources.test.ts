@@ -121,6 +121,14 @@ describe('createYamlEnvSource', () => {
     expect(source.describe()).toBe(`file ${yamlPath}`)
   })
 
+  test('reports the search location when yaml is not found up the tree', () => {
+    vi.spyOn(process, 'cwd').mockReturnValue(tmpDir)
+    const source = createYamlEnvSource({ envVar: ENV_VAR, yamlFile: YAML_FILE })
+    expect(() => source.loadSync()).toThrow(
+      `Config not found in any source: env ${ENV_VAR}, file ${YAML_FILE} (searched up from ${tmpDir})`,
+    )
+  })
+
   test('throws when neither env nor yaml available', () => {
     const missing = join(tmpDir, 'does-not-exist.yaml')
     const source = createYamlEnvSource({

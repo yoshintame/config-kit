@@ -185,7 +185,11 @@ Build env: `buildEnvSchema` валидирует env на старте dev/build
 
 ## Сборка
 
-`bun run build` — tsup собирает каждый пакет в `dist/` (ESM + `.d.ts`); потребители резолвят `dist`, внутри репо тесты и `tsc` идут по export-condition `source` на исходники. Потребитель через `bun link` видит изменения только после пересборки.
+`bun run build` — tsup собирает каждый пакет в `dist/` (ESM + `.d.ts`); потребители резолвят `dist`. Внутри репо `tsc` идёт по export-condition `source`, vitest — по `resolve.alias` на исходники (condition не доходит до node-окружения vitest). Потребитель через `bun link` видит изменения только после пересборки.
+
+## Мутационное тестирование
+
+`bun run test:mutation` — StrykerJS (vitest runner, per-test coverage, typescript checker). Результаты инкрементальные (`reports/stryker-incremental.json`), HTML-отчёт — `reports/mutation/index.html`. Выжившие мутанты — непроверенное поведение: дописать тест или упростить код. Оставшиеся выжившие эквивалентны (логгер, имя плагина, `?? []`, форматирование сгенерированного кода, guard'ы на невозможные значения).
 
 ## Зависимости
 

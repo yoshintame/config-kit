@@ -6,10 +6,13 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { build, createServer, type ViteDevServer } from 'vite'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -124,6 +127,74 @@ describe('dev', () => {
     )
   })
 
+  test('private env var wins over yaml private section', async () => {
+    process.env.APP_PRIVATE_CONFIG = JSON.stringify({ db: { url: 'from-env' } })
+    const dev = await startDev()
+    expect(await loadSource(dev, '@senate/config/private')).toEqual({
+      backend: { apiUrl: 'https://api.local' },
+      db: { url: 'from-env' },
+    })
+  })
+
+  test('fails to start on invalid server config', async () => {
+    const serverSchema = z
+      .object({ db: z.object({ url: z.number() }) })
+      .meta({ title: 'server' })
+    await expect(startDev({ serverSchema })).rejects.toThrow(
+      /Config validation failed for schema 'server'/,
+    )
+  })
+
+  test('runs from env var alone without config.yaml', async () => {
+    rmSync(yamlPath)
+    process.env.APP_PUBLIC_CONFIG = JSON.stringify({
+      backend: { apiUrl: 'https://api.env' },
+    })
+    const dev = await startDev()
+    expect(await loadSource(dev, '@senate/config')).toEqual({
+      backend: { apiUrl: 'https://api.env' },
+    })
+  })
+
+  test('client code resolves the public module', async () => {
+    const dev = await startDev()
+    const result = await dev.transformRequest('/src/main.ts')
+    expect(result?.code).toContain('senate-config:public')
+  })
+
+  test('client code resolves regular imports', async () => {
+    writeFileSync(join(root, 'src/value.ts'), 'export const value = 1\n')
+    writeFileSync(
+      join(root, 'src/app.ts'),
+      "import { value } from './value'\nconsole.log(value)\n",
+    )
+    const dev = await startDev()
+    const result = await dev.transformRequest('/src/app.ts')
+    expect(result?.code).toContain('/src/value.ts')
+  })
+
+  test('watches config.yaml found above the root', async () => {
+    const appRoot = join(root, 'app')
+    mkdirSync(appRoot)
+    server = await createServer({
+      root: appRoot,
+      configFile: false,
+      logLevel: 'silent',
+      server: { middlewareMode: true, ws: false },
+      plugins: [senateConfig({ schema: publicSchema })],
+    })
+    expect(server.watcher.getWatched()[root]).toContain('config.yaml')
+  })
+
+  test('does not inject the placeholder script', async () => {
+    const dev = await startDev()
+    const html = await dev.transformIndexHtml(
+      '/index.html',
+      readFileSync(join(root, 'index.html'), 'utf-8'),
+    )
+    expect(html).not.toContain('__CONFIG__')
+  })
+
   test('private module is rejected in client code', async () => {
     writeFileSync(
       join(root, 'src/leak.ts'),
@@ -171,6 +242,24 @@ describe('local yaml', () => {
   })
 })
 
+describe('local yaml removal', () => {
+  test('reverts overrides when the local yaml is deleted', async () => {
+    const localPath = join(root, 'config.local.yaml')
+    writeFileSync(
+      localPath,
+      'public:\n  backend:\n    apiUrl: https://api.mine\n',
+    )
+    const dev = await startDev()
+    await loadSource(dev, '@senate/config')
+
+    await changeYaml(dev, () => rmSync(localPath), localPath, 'unlink')
+
+    expect(await loadSource(dev, '@senate/config')).toEqual({
+      backend: { apiUrl: 'https://api.local' },
+    })
+  })
+})
+
 describe('yaml env section', () => {
   const buildEnvSchema = z.object({
     VITE_FLAG: z.stringbool().default(false),
@@ -198,6 +287,24 @@ describe('yaml env section', () => {
       'import.meta.env.VITE_NAME': '"process"',
     })
     vi.unstubAllEnvs()
+  })
+
+  test('drops null values and serializes objects', async () => {
+    writeYaml(
+      'https://api.local',
+      '',
+      'env:\n  VITE_NAME: null\n  VITE_JSON:\n    a: 1\n',
+    )
+    const dev = await startDev({
+      buildEnvSchema: z.object({
+        VITE_NAME: z.string().default('fallback'),
+        VITE_JSON: z.string(),
+      }),
+    })
+    expect(dev.config.define).toMatchObject({
+      'import.meta.env.VITE_NAME': '"fallback"',
+      'import.meta.env.VITE_JSON': JSON.stringify('{"a":1}'),
+    })
   })
 
   test('change restarts the server', async () => {
@@ -309,8 +416,52 @@ describe('watch', () => {
     })
   })
 
+  test('any matching path among several changes decides the reaction', async () => {
+    const restartDev = await startDev({ serverRestart: ['app.*'] })
+    const restart = vi.spyOn(restartDev, 'restart').mockResolvedValue()
+    await changeYaml(restartDev, () =>
+      writeYaml('https://api.changed', '  app:\n    theme: dark\n'),
+    )
+    expect(restart).toHaveBeenCalledOnce()
+    await restartDev.close()
+
+    writeYaml('https://api.local')
+    const reloadDev = await startDev({ fullReload: ['app.*'] })
+    await loadSource(reloadDev, '@senate/config')
+    const send = vi.spyOn(reloadDev.ws, 'send')
+    await changeYaml(reloadDev, () =>
+      writeYaml('https://api.changed', '  app:\n    theme: dark\n'),
+    )
+    expect(send).toHaveBeenCalledWith({ type: 'full-reload' })
+  })
+
+  test('ignores changes reported for unrelated files', async () => {
+    const dev = await startDev()
+    await loadSource(dev, '@senate/config')
+    const reloadModule = vi.spyOn(dev, 'reloadModule')
+
+    await changeYaml(
+      dev,
+      () => writeYaml('https://api.changed'),
+      join(root, 'src/main.ts'),
+    )
+
+    expect(reloadModule).not.toHaveBeenCalled()
+  })
+
+  test('watch: false disables reactions', async () => {
+    const dev = await startDev({ watch: false })
+    await loadSource(dev, '@senate/config')
+    const reloadModule = vi.spyOn(dev, 'reloadModule')
+
+    await changeYaml(dev, () => writeYaml('https://api.changed'))
+
+    expect(reloadModule).not.toHaveBeenCalled()
+  })
+
   test('unchanged content is a no-op', async () => {
     const dev = await startDev({ serverRestart: ['backend.*'] })
+    await loadSource(dev, '@senate/config')
     const restart = vi.spyOn(dev, 'restart').mockResolvedValue()
     const reloadModule = vi.spyOn(dev, 'reloadModule')
 
@@ -369,10 +520,74 @@ describe('build', () => {
     )
   })
 
+  test('rewrites a stale env.d.ts', async () => {
+    const dts = join(root, 'src/env.d.ts')
+    writeFileSync(dts, 'stale')
+    await runBuild({ buildEnvSchema, envDts: 'src/env.d.ts' })
+    expect(readFileSync(dts, 'utf-8')).toContain('readonly VITE_FLAG: boolean')
+  })
+
+  test('leaves an up-to-date env.d.ts untouched', async () => {
+    const dts = join(root, 'src/env.d.ts')
+    await runBuild({ buildEnvSchema, envDts: 'src/env.d.ts' })
+    const past = new Date('2020-01-01')
+    utimesSync(dts, past, past)
+
+    await runBuild({ buildEnvSchema, envDts: 'src/env.d.ts' })
+
+    expect(statSync(dts).mtime).toEqual(past)
+  })
+
   test('fails on invalid build env', async () => {
     writeFileSync(join(root, '.env.production'), 'VITE_FLAG=maybe\n')
     await expect(runBuild({ buildEnvSchema })).rejects.toThrow(
       /Build env validation failed/,
+    )
+  })
+})
+
+describe('ssr build', () => {
+  test('virtual modules read window and env at runtime', async () => {
+    writeFileSync(
+      join(root, 'src/server.ts'),
+      [
+        "export { source as publicSource } from '@senate/config'",
+        "export { source as privateSource } from '@senate/config/private'",
+      ].join('\n'),
+    )
+    await build({
+      root,
+      configFile: false,
+      logLevel: 'silent',
+      build: {
+        ssr: 'src/server.ts',
+        outDir: 'dist-ssr',
+        rollupOptions: { output: { entryFileNames: 'server.mjs' } },
+      },
+      plugins: [senateConfig()],
+    })
+    const mod = (await import(
+      pathToFileURL(join(root, 'dist-ssr/server.mjs')).href
+    )) as {
+      publicSource: SourceModule['source']
+      privateSource: SourceModule['source']
+    }
+
+    vi.stubGlobal('__CONFIG__', { from: 'window' })
+    expect(mod.publicSource.loadSync()).toEqual({ from: 'window' })
+    expect(mod.publicSource.describe()).toBe('window.__CONFIG__')
+    vi.unstubAllGlobals()
+
+    expect(mod.privateSource.loadSync()).toBeUndefined()
+    process.env.APP_PUBLIC_CONFIG = JSON.stringify({ a: 1, shared: 'public' })
+    process.env.APP_PRIVATE_CONFIG = JSON.stringify({ b: 2, shared: 'private' })
+    expect(mod.privateSource.loadSync()).toEqual({
+      a: 1,
+      b: 2,
+      shared: 'private',
+    })
+    expect(mod.privateSource.describe()).toBe(
+      'env APP_PUBLIC_CONFIG + APP_PRIVATE_CONFIG',
     )
   })
 })

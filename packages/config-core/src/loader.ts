@@ -23,13 +23,13 @@ function schemaName(schema: ZodType): string | undefined {
 }
 
 function topKeysOf(schema: ZodType): string[] | undefined {
-  const def = schema._zod.def as {
-    type: string
-    shape?: Record<string, unknown>
-    in?: ZodType
+  const { def } = schema._zod
+  if (def.type === 'object') {
+    return Object.keys((def as z.core.$ZodObjectDef).shape)
   }
-  if (def.type === 'object' && def.shape) return Object.keys(def.shape)
-  if (def.type === 'pipe' && def.in) return topKeysOf(def.in)
+  if (def.type === 'pipe') {
+    return topKeysOf((def as z.core.$ZodPipeDef).in as ZodType)
+  }
   return undefined
 }
 

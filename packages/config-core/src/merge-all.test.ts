@@ -21,6 +21,10 @@ describe('deepMerge', () => {
     ).toEqual({ a: [3], b: 'flat' })
   })
 
+  test('replaces a null base value with an overlay object', () => {
+    expect(deepMerge({ a: null }, { a: { b: 1 } })).toEqual({ a: { b: 1 } })
+  })
+
   test('keeps null from overlay as a literal value', () => {
     expect(deepMerge({ a: 1 }, { a: null })).toEqual({ a: null })
   })
@@ -68,6 +72,10 @@ describe('mergeAll', () => {
       },
     ])
     expect(() => source.loadSync()).toThrow('boom')
+  })
+
+  test('has no watch when no source is watchable', () => {
+    expect(mergeAll([staticSource({ a: 1 }, 'a')]).watch).toBeUndefined()
   })
 
   test('watch fans out to watchable sources', () => {

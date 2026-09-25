@@ -87,6 +87,24 @@ describe('createSyncConfigLoader', () => {
     expect({ ...config }).toEqual({ x: 1, y: 2 })
   })
 
+  test('reads the source once and validates each schema once', () => {
+    const source = createInMemorySource({ a: 1 })
+    const loadSync = vi.spyOn(source, 'loadSync')
+    const loader = createSyncConfigLoader(source)
+    const parse = vi.fn((a: number) => a)
+    const config = loader.defineConfig(
+      z.object({ a: z.number().transform(parse) }),
+    )
+
+    loader.loadRaw()
+    expect(config.a).toBe(1)
+    expect(config.a).toBe(1)
+    loader.validateAll()
+
+    expect(loadSync).toHaveBeenCalledOnce()
+    expect(parse).toHaveBeenCalledOnce()
+  })
+
   test('loadRaw returns unvalidated value', () => {
     const raw = { anything: [1, 2] }
     const loader = createSyncConfigLoader(createInMemorySource(raw))
@@ -108,7 +126,7 @@ describe('createSyncConfigLoader', () => {
       loader.defineConfig(z.object({ a: z.number() }).meta({ id: 'first' }))
       loader.defineConfig(z.object({ b: z.string() }).meta({ id: 'second' }))
       expect(() => loader.validateAll()).toThrow(
-        /schema 'first'.*schema 'second'/s,
+        /schema 'first'[\s\S]*\n\nConfig validation failed for schema 'second'/,
       )
     })
   })
@@ -127,11 +145,19 @@ describe('createSyncConfigLoader', () => {
 
     test('throws on unknown keys', () => {
       const loader = createSyncConfigLoader(
-        createInMemorySource({ a: 1, typo: 2 }),
+        createInMemorySource({ a: 1, typo: 2, other: 3 }),
       )
       loader.defineConfig(z.object({ a: z.number() }))
       expect(() => loader.assertOnlyKnownTopKeys()).toThrow(
-        /Unknown top-level config keys \(loaded from in-memory\): typo/,
+        /Unknown top-level config keys \(loaded from in-memory\): typo, other$/,
+      )
+    })
+
+    test('throws on unnamed non-object schema', () => {
+      const loader = createSyncConfigLoader(createInMemorySource({ a: 1 }))
+      loader.defineConfig(z.record(z.string(), z.number()))
+      expect(() => loader.assertOnlyKnownTopKeys()).toThrow(
+        /only object schemas$/,
       )
     })
 
@@ -145,8 +171,12 @@ describe('createSyncConfigLoader', () => {
       )
     })
 
-    test('throws on non-object root', () => {
-      const loader = createSyncConfigLoader(createInMemorySource([1]))
+    test.each([
+      ['array', [1]],
+      ['null', null],
+      ['string', 'config'],
+    ])('throws on %s root', (_, root) => {
+      const loader = createSyncConfigLoader(createInMemorySource(root))
       expect(() => loader.assertOnlyKnownTopKeys()).toThrow(/not an object/)
     })
   })
@@ -174,6 +204,25 @@ describe('createSyncConfigLoader', () => {
       unsubscribe()
       source.set({ a: 2 })
       expect(cb).not.toHaveBeenCalled()
+    })
+
+    test('unwatches the source only after the last unsubscribe', () => {
+      const unwatch = vi.fn()
+      const watch = vi.fn(() => unwatch)
+      const loader = createSyncConfigLoader({
+        loadSync: () => ({}),
+        describe: () => 'watched',
+        watch,
+      })
+
+      const first = loader.onChange(() => {})
+      const second = loader.onChange(() => {})
+      expect(watch).toHaveBeenCalledOnce()
+
+      first()
+      expect(unwatch).not.toHaveBeenCalled()
+      second()
+      expect(unwatch).toHaveBeenCalledOnce()
     })
 
     test('is a no-op for sources without watch', () => {
