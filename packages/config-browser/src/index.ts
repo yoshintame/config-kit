@@ -1,1 +1,5 @@
-export { createWindowSource, type WindowSourceOptions } from './window-source'
+export {
+  createJsonScriptSource,
+  DEFAULT_CONFIG_ELEMENT_ID,
+  type JsonScriptSourceOptions,
+} from './json-script-source'

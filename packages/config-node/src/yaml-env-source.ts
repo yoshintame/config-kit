@@ -9,10 +9,23 @@ import { createFileSource } from './file-source'
 import { createProcessEnvSource } from './process-env-source'
 import { yamlParser } from './yaml-parser'
 
-export type YamlEnvSourceOptions = {
+export interface YamlEnvSourceOptions {
   envVar: string
   yamlFile: string
   yamlPath?: string
+}
+
+export function createYamlEnvSource({
+  envVar,
+  yamlFile,
+  yamlPath,
+}: YamlEnvSourceOptions): SyncConfigSource {
+  return firstNonEmpty([
+    createProcessEnvSource({ envVar }),
+    yamlPath
+      ? createFileSource({ path: yamlPath, parser: yamlParser })
+      : createFindUpFileSource(yamlFile, yamlParser),
+  ])
 }
 
 function createFindUpFileSource(
@@ -31,17 +44,4 @@ function createFindUpFileSource(
       found?.describe() ??
       `file ${fileName} (searched up from ${process.cwd()})`,
   }
-}
-
-export function createYamlEnvSource({
-  envVar,
-  yamlFile,
-  yamlPath,
-}: YamlEnvSourceOptions): SyncConfigSource {
-  return firstNonEmpty([
-    createProcessEnvSource({ envVar }),
-    yamlPath
-      ? createFileSource({ path: yamlPath, parser: yamlParser })
-      : createFindUpFileSource(yamlFile, yamlParser),
-  ])
 }

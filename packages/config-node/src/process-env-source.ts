@@ -1,12 +1,11 @@
 import {
   jsonParser,
   type Parser,
+  parseWith,
   type SyncConfigSource,
 } from '@senate/config-core'
 
-import { parseWith } from './parse-with'
-
-export type ProcessEnvSourceOptions = {
+export interface ProcessEnvSourceOptions {
   envVar: string
   parser?: Parser
 }
