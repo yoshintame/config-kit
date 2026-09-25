@@ -1,20 +1,16 @@
 import path from 'node:path'
 
+import { isNil, isPlainObject, mapValues, omitBy } from 'es-toolkit'
+import { findUpSync } from 'find-up'
+import type { ZodType, z } from 'zod'
+
 import {
   deepMerge,
   mergeAll,
   parseOrThrow,
   type SyncConfigSource,
-} from '@senate/config-core'
-import {
-  createFileSource,
-  createProcessEnvSource,
-  yamlParser,
-} from '@senate/config-node'
-import { isNil, isPlainObject, mapValues, omitBy } from 'es-toolkit'
-import { findUpSync } from 'find-up'
-import type { ZodType, z } from 'zod'
-
+} from '../core'
+import { createFileSource, createProcessEnvSource, yamlParser } from '../node'
 import { OVERLAY_ENV_VAR, PRIVATE_ENV_VAR, PUBLIC_ENV_VAR } from './constants'
 
 export interface DevConfigOptions {

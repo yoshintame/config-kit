@@ -1,8 +1,4 @@
-import {
-  createSyncConfigLoader,
-  type SyncConfigLoader,
-} from '@senate/config-core'
-
+import { createSyncConfigLoader, type SyncConfigLoader } from '../core'
 import {
   createYamlEnvSource,
   type YamlEnvSourceOptions,

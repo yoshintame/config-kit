@@ -1,6 +1,6 @@
-import { createInMemorySource, type InMemorySource } from '@senate/config-core'
 import { describe, expect, test, vi } from 'vitest'
 
+import { createInMemorySource, type InMemorySource } from '../core'
 import { buildModule, devModule } from './virtual-modules'
 
 interface HotStub {
@@ -59,7 +59,7 @@ describe('buildModule', () => {
   test('client public module reads the JSON script', () => {
     expect(buildModule({ kind: 'public', ssr: false, ...names })).toBe(
       [
-        "import { createJsonScriptSource } from '@senate/config-browser'",
+        "import { createJsonScriptSource } from '@yoshintame/config-kit/browser'",
         'export const source = createJsonScriptSource({ elementId: "cfg" })',
       ].join('\n'),
     )

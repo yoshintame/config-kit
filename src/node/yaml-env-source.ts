@@ -1,10 +1,6 @@
-import {
-  firstNonEmpty,
-  type Parser,
-  type SyncConfigSource,
-} from '@senate/config-core'
 import { findUpSync } from 'find-up'
 
+import { firstNonEmpty, type Parser, type SyncConfigSource } from '../core'
 import { createFileSource } from './file-source'
 import { createProcessEnvSource } from './process-env-source'
 import { yamlParser } from './yaml-parser'

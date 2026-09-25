@@ -19,19 +19,25 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import z from 'zod'
 
 import { loadDevConfig } from './dev-reader'
-import { type SenateConfigOptions, senateConfig } from './plugin'
+import { type ConfigKitOptions, configKit } from './plugin'
 
 type SourceModule = {
   source: { loadSync(): unknown; describe(): string }
 }
 
+const srcDir = fileURLToPath(new URL('..', import.meta.url))
+
 const sourceResolve = {
-  alias: Object.fromEntries(
-    ['config-core', 'config-node', 'config-browser'].map((pkg) => [
-      `@senate/${pkg}`,
-      fileURLToPath(new URL(`../../${pkg}/src/index.ts`, import.meta.url)),
-    ]),
-  ),
+  alias: [
+    {
+      find: /^@yoshintame\/config-kit\/(node|browser)$/,
+      replacement: `${srcDir}$1/index.ts`,
+    },
+    {
+      find: /^@yoshintame\/config-kit$/,
+      replacement: `${srcDir}core/index.ts`,
+    },
+  ],
 }
 
 const publicSchema = z
@@ -49,14 +55,14 @@ function writeYaml(apiUrl: unknown, extra = '', tail = '') {
   )
 }
 
-async function startDev(options: SenateConfigOptions = {}) {
+async function startDev(options: ConfigKitOptions = {}) {
   server = await createServer({
     root,
     configFile: false,
     resolve: sourceResolve,
     logLevel: 'silent',
     server: { middlewareMode: true, ws: false },
-    plugins: [senateConfig({ schema: publicSchema, ...options })],
+    plugins: [configKit({ schema: publicSchema, ...options })],
   })
   return server
 }
@@ -88,7 +94,7 @@ beforeEach(() => {
   )
   writeFileSync(
     join(root, 'src/main.ts'),
-    "import { source } from '@senate/config'\nconsole.log(source.loadSync(), import.meta.env.VITE_FLAG)\n",
+    "import { source } from 'virtual:config-kit'\nconsole.log(source.loadSync(), import.meta.env.VITE_FLAG)\n",
   )
   writeYaml('https://api.local')
   delete process.env.APP_PUBLIC_CONFIG
@@ -107,14 +113,14 @@ afterEach(async () => {
 describe('dev', () => {
   test('public module exposes yaml public section', async () => {
     const dev = await startDev()
-    expect(await loadSource(dev, '@senate/config')).toEqual({
+    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
       backend: { apiUrl: 'https://api.local' },
     })
   })
 
   test('private module merges public and private sections', async () => {
     const dev = await startDev()
-    expect(await loadSource(dev, '@senate/config/private')).toEqual({
+    expect(await loadSource(dev, 'virtual:config-kit/private')).toEqual({
       backend: { apiUrl: 'https://api.local' },
       db: { url: 'postgres://local' },
     })
@@ -125,7 +131,7 @@ describe('dev', () => {
       backend: { apiUrl: 'https://api.env' },
     })
     const dev = await startDev()
-    expect(await loadSource(dev, '@senate/config')).toEqual({
+    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
       backend: { apiUrl: 'https://api.env' },
     })
   })
@@ -140,7 +146,7 @@ describe('dev', () => {
   test('private env var wins over yaml private section', async () => {
     process.env.APP_PRIVATE_CONFIG = JSON.stringify({ db: { url: 'from-env' } })
     const dev = await startDev()
-    expect(await loadSource(dev, '@senate/config/private')).toEqual({
+    expect(await loadSource(dev, 'virtual:config-kit/private')).toEqual({
       backend: { apiUrl: 'https://api.local' },
       db: { url: 'from-env' },
     })
@@ -161,7 +167,7 @@ describe('dev', () => {
       backend: { apiUrl: 'https://api.env' },
     })
     const dev = await startDev()
-    expect(await loadSource(dev, '@senate/config')).toEqual({
+    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
       backend: { apiUrl: 'https://api.env' },
     })
   })
@@ -169,7 +175,7 @@ describe('dev', () => {
   test('client code resolves the public module', async () => {
     const dev = await startDev()
     const result = await dev.transformRequest('/src/main.ts')
-    expect(result?.code).toContain('senate-config:public')
+    expect(result?.code).toContain('config-kit:public')
   })
 
   test('client code resolves regular imports', async () => {
@@ -192,7 +198,7 @@ describe('dev', () => {
       resolve: sourceResolve,
       logLevel: 'silent',
       server: { middlewareMode: true, ws: false },
-      plugins: [senateConfig({ schema: publicSchema })],
+      plugins: [configKit({ schema: publicSchema })],
     })
     expect(server.watcher.getWatched()[root]).toContain('config.yaml')
   })
@@ -209,7 +215,7 @@ describe('dev', () => {
   test('private module is rejected in client code', async () => {
     writeFileSync(
       join(root, 'src/leak.ts'),
-      "export { source } from '@senate/config/private'\n",
+      "export { source } from 'virtual:config-kit/private'\n",
     )
     const dev = await startDev()
     await expect(dev.transformRequest('/src/leak.ts')).rejects.toThrow(
@@ -225,7 +231,7 @@ describe('local yaml', () => {
       'public:\n  backend:\n    apiUrl: https://api.mine\n',
     )
     const dev = await startDev()
-    expect(await loadSource(dev, '@senate/config/private')).toEqual({
+    expect(await loadSource(dev, 'virtual:config-kit/private')).toEqual({
       backend: { apiUrl: 'https://api.mine' },
       db: { url: 'postgres://local' },
     })
@@ -233,7 +239,7 @@ describe('local yaml', () => {
 
   test('creating it at runtime hot-reloads config', async () => {
     const dev = await startDev()
-    await loadSource(dev, '@senate/config')
+    await loadSource(dev, 'virtual:config-kit')
     const localPath = join(root, 'config.local.yaml')
 
     await changeYaml(
@@ -247,7 +253,7 @@ describe('local yaml', () => {
       'add',
     )
 
-    expect(await loadSource(dev, '@senate/config')).toEqual({
+    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
       backend: { apiUrl: 'https://api.mine' },
     })
   })
@@ -261,11 +267,11 @@ describe('local yaml removal', () => {
       'public:\n  backend:\n    apiUrl: https://api.mine\n',
     )
     const dev = await startDev()
-    await loadSource(dev, '@senate/config')
+    await loadSource(dev, 'virtual:config-kit')
 
     await changeYaml(dev, () => rmSync(localPath), localPath, 'unlink')
 
-    expect(await loadSource(dev, '@senate/config')).toEqual({
+    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
       backend: { apiUrl: 'https://api.local' },
     })
   })
@@ -337,7 +343,7 @@ describe('yaml env section', () => {
       configFile: false,
       resolve: sourceResolve,
       logLevel: 'silent',
-      plugins: [senateConfig({ schema: publicSchema, buildEnvSchema })],
+      plugins: [configKit({ schema: publicSchema, buildEnvSchema })],
     })
     const assets = join(root, 'dist', 'assets')
     const js = readdirSync(assets)
@@ -370,13 +376,13 @@ describe('loadDevConfig', () => {
 describe('watch', () => {
   test('runtime change hot-reloads config modules', async () => {
     const dev = await startDev()
-    await loadSource(dev, '@senate/config')
+    await loadSource(dev, 'virtual:config-kit')
     const reloadModule = vi.spyOn(dev, 'reloadModule')
 
     await changeYaml(dev, () => writeYaml('https://api.changed'))
 
     expect(reloadModule).toHaveBeenCalled()
-    expect(await loadSource(dev, '@senate/config')).toEqual({
+    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
       backend: { apiUrl: 'https://api.changed' },
     })
   })
@@ -392,7 +398,7 @@ describe('watch', () => {
 
   test('fullReload paths trigger a full page reload', async () => {
     const dev = await startDev({ fullReload: ['app.*'] })
-    await loadSource(dev, '@senate/config')
+    await loadSource(dev, 'virtual:config-kit')
     const send = vi.spyOn(dev.ws, 'send')
 
     await changeYaml(dev, () =>
@@ -400,7 +406,7 @@ describe('watch', () => {
     )
 
     expect(send).toHaveBeenCalledWith({ type: 'full-reload' })
-    expect(await loadSource(dev, '@senate/config')).toEqual({
+    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
       backend: { apiUrl: 'https://api.local' },
       app: { theme: 'dark' },
     })
@@ -408,7 +414,7 @@ describe('watch', () => {
 
   test('invalid change reports error and keeps previous config', async () => {
     const dev = await startDev()
-    await loadSource(dev, '@senate/config')
+    await loadSource(dev, 'virtual:config-kit')
     const send = vi.spyOn(dev.ws, 'send')
     const reloadModule = vi.spyOn(dev, 'reloadModule')
 
@@ -423,7 +429,7 @@ describe('watch', () => {
       }),
     )
     expect(reloadModule).not.toHaveBeenCalled()
-    expect(await loadSource(dev, '@senate/config')).toEqual({
+    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
       backend: { apiUrl: 'https://api.local' },
     })
   })
@@ -439,7 +445,7 @@ describe('watch', () => {
 
     writeYaml('https://api.local')
     const reloadDev = await startDev({ fullReload: ['app.*'] })
-    await loadSource(reloadDev, '@senate/config')
+    await loadSource(reloadDev, 'virtual:config-kit')
     const send = vi.spyOn(reloadDev.ws, 'send')
     await changeYaml(reloadDev, () =>
       writeYaml('https://api.changed', '  app:\n    theme: dark\n'),
@@ -449,7 +455,7 @@ describe('watch', () => {
 
   test('ignores changes reported for unrelated files', async () => {
     const dev = await startDev()
-    await loadSource(dev, '@senate/config')
+    await loadSource(dev, 'virtual:config-kit')
     const reloadModule = vi.spyOn(dev, 'reloadModule')
 
     await changeYaml(
@@ -463,7 +469,7 @@ describe('watch', () => {
 
   test('watch: false disables reactions', async () => {
     const dev = await startDev({ watch: false })
-    await loadSource(dev, '@senate/config')
+    await loadSource(dev, 'virtual:config-kit')
     const reloadModule = vi.spyOn(dev, 'reloadModule')
 
     await changeYaml(dev, () => writeYaml('https://api.changed'))
@@ -473,7 +479,7 @@ describe('watch', () => {
 
   test('recovering from an error clears the overlay with an update', async () => {
     const dev = await startDev()
-    await loadSource(dev, '@senate/config')
+    await loadSource(dev, 'virtual:config-kit')
     const reloadModule = vi.spyOn(dev, 'reloadModule')
 
     await changeYaml(dev, () => writeYaml('broken'))
@@ -489,14 +495,14 @@ describe('watch', () => {
 
   test('dev modules self-accept and keep their source across updates', async () => {
     const dev = await startDev()
-    const result = await dev.transformRequest('@senate/config')
+    const result = await dev.transformRequest('virtual:config-kit')
     expect(result?.code).toContain('import.meta.hot.accept()')
     expect(result?.code).toContain('import.meta.hot.data.source = source')
   })
 
   test('unchanged content is a no-op', async () => {
     const dev = await startDev({ serverRestart: ['backend.*'] })
-    await loadSource(dev, '@senate/config')
+    await loadSource(dev, 'virtual:config-kit')
     const restart = vi.spyOn(dev, 'restart').mockResolvedValue()
     const reloadModule = vi.spyOn(dev, 'reloadModule')
 
@@ -512,13 +518,13 @@ describe('build', () => {
     VITE_FLAG: z.stringbool().default(false),
   })
 
-  async function runBuild(options: SenateConfigOptions = {}) {
+  async function runBuild(options: ConfigKitOptions = {}) {
     await build({
       root,
       configFile: false,
       resolve: sourceResolve,
       logLevel: 'silent',
-      plugins: [senateConfig({ schema: publicSchema, ...options })],
+      plugins: [configKit({ schema: publicSchema, ...options })],
     })
     const dist = join(root, 'dist')
     const assets = join(dist, 'assets')
@@ -587,8 +593,8 @@ describe('ssr build', () => {
     writeFileSync(
       join(root, 'src/server.ts'),
       [
-        "export { source as publicSource } from '@senate/config'",
-        "export { source as privateSource } from '@senate/config/private'",
+        "export { source as publicSource } from 'virtual:config-kit'",
+        "export { source as privateSource } from 'virtual:config-kit/private'",
       ].join('\n'),
     )
     await build({
@@ -601,7 +607,7 @@ describe('ssr build', () => {
         outDir: 'dist-ssr',
         rollupOptions: { output: { entryFileNames: 'server.mjs' } },
       },
-      plugins: [senateConfig()],
+      plugins: [configKit()],
     })
     const mod = (await import(
       pathToFileURL(join(root, 'dist-ssr/server.mjs')).href

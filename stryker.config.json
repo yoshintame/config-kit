@@ -9,10 +9,10 @@
   "tsconfigFile": "tsconfig.json",
   "coverageAnalysis": "perTest",
   "mutate": [
-    "packages/*/src/**/*.ts",
-    "!packages/*/src/**/*.test.ts",
-    "!packages/*/src/index.ts",
-    "!packages/config-node/src/browser.ts"
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "!src/*/index.ts",
+    "!src/node/browser.ts"
   ],
   "reporters": ["clear-text", "progress", "html"],
   "htmlReporter": {

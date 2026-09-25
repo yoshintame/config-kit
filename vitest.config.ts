@@ -2,19 +2,23 @@ import { fileURLToPath } from 'node:url'
 
 import { defineConfig } from 'vitest/config'
 
-const source = (pkg: string) =>
-  fileURLToPath(new URL(`./packages/${pkg}/src/index.ts`, import.meta.url))
+const srcDir = fileURLToPath(new URL('./src/', import.meta.url))
 
 export default defineConfig({
   resolve: {
-    alias: {
-      '@senate/config-core': source('config-core'),
-      '@senate/config-node': source('config-node'),
-      '@senate/config-browser': source('config-browser'),
-    },
+    alias: [
+      {
+        find: /^@yoshintame\/config-kit\/(node|browser)$/,
+        replacement: `${srcDir}$1/index.ts`,
+      },
+      {
+        find: /^@yoshintame\/config-kit$/,
+        replacement: `${srcDir}core/index.ts`,
+      },
+    ],
   },
   test: {
-    include: ['packages/*/src/**/*.test.ts'],
+    include: ['src/**/*.test.ts'],
     environment: 'node',
   },
 })

@@ -1,5 +1,6 @@
 import { match } from 'ts-pattern'
 
+import { PACKAGE_NAME } from './constants'
 import type { LoadedConfig } from './dev-reader'
 
 export type ModuleKind = 'public' | 'server'
@@ -14,7 +15,7 @@ export interface BuildModuleOptions {
 
 export function devModule({ raw, origin }: LoadedConfig): string {
   return [
-    "import { createInMemorySource } from '@senate/config-core'",
+    `import { createInMemorySource } from '${PACKAGE_NAME}'`,
     `const raw = ${JSON.stringify(raw)}`,
     'const previous = import.meta.hot?.data.source',
     `export const source = previous ?? createInMemorySource(raw, ${JSON.stringify(origin)})`,
@@ -37,16 +38,16 @@ export function buildModule({
     `createProcessEnvSource({ envVar: ${JSON.stringify(envVar)} })`
   return match({ kind, ssr })
     .with({ kind: 'public', ssr: false }, () => [
-      "import { createJsonScriptSource } from '@senate/config-browser'",
+      `import { createJsonScriptSource } from '${PACKAGE_NAME}/browser'`,
       `export const source = createJsonScriptSource({ elementId: ${JSON.stringify(elementId)} })`,
     ])
     .with({ kind: 'public', ssr: true }, () => [
-      "import { createProcessEnvSource } from '@senate/config-node'",
+      `import { createProcessEnvSource } from '${PACKAGE_NAME}/node'`,
       `export const source = ${envSource(publicEnvVar)}`,
     ])
     .with({ kind: 'server' }, () => [
-      "import { mergeAll } from '@senate/config-core'",
-      "import { createProcessEnvSource } from '@senate/config-node'",
+      `import { mergeAll } from '${PACKAGE_NAME}'`,
+      `import { createProcessEnvSource } from '${PACKAGE_NAME}/node'`,
       `export const source = mergeAll([${envSource(publicEnvVar)}, ${envSource(privateEnvVar)}])`,
     ])
     .exhaustive()

@@ -2,13 +2,13 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { DEFAULT_CONFIG_ELEMENT_ID } from '@senate/config-browser'
-import { parseOrThrow } from '@senate/config-core'
 import { isEqual } from 'es-toolkit'
 import { match } from 'ts-pattern'
 import { loadEnv, type ModuleNode, type Plugin, type ViteDevServer } from 'vite'
 import type { ZodType } from 'zod'
 
+import { DEFAULT_CONFIG_ELEMENT_ID } from '../browser'
+import { parseOrThrow } from '../core'
 import { changedPaths, matchesAny } from './changed-paths'
 import {
   PRIVATE_ENV_VAR,
@@ -25,7 +25,7 @@ import {
 import { renderEnvDts } from './env-dts'
 import { buildModule, devModule, type ModuleKind } from './virtual-modules'
 
-export interface SenateConfigOptions extends DevConfigOptions {
+export interface ConfigKitOptions extends DevConfigOptions {
   buildEnvSchema?: ZodType
   elementId?: string
   watch?: boolean
@@ -37,12 +37,12 @@ export interface SenateConfigOptions extends DevConfigOptions {
 type Reaction = 'none' | 'restart' | 'full-reload' | 'hmr'
 
 const RESOLVED_IDS: Record<ModuleKind, string> = {
-  public: '\0senate-config:public',
-  server: '\0senate-config:private',
+  public: '\0config-kit:public',
+  server: '\0config-kit:private',
 }
 const PLUGIN_FILE = fileURLToPath(import.meta.url)
 
-export function senateConfig({
+export function configKit({
   buildEnvSchema,
   elementId = DEFAULT_CONFIG_ELEMENT_ID,
   watch = true,
@@ -52,7 +52,7 @@ export function senateConfig({
   publicEnvVar = PUBLIC_ENV_VAR,
   privateEnvVar = PRIVATE_ENV_VAR,
   ...devOptions
-}: SenateConfigOptions = {}): Plugin {
+}: ConfigKitOptions = {}): Plugin {
   let command: 'serve' | 'build' = 'serve'
   let dev: { reader: DevReader; state: DevState } | undefined
   let failed = false
@@ -82,7 +82,7 @@ export function senateConfig({
   }
 
   return {
-    name: 'senate-config',
+    name: 'config-kit',
     enforce: 'pre',
 
     config(userConfig, env) {

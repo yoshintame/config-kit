@@ -3,7 +3,7 @@ import {
   type Parser,
   parseWith,
   type SyncConfigSource,
-} from '@senate/config-core'
+} from '../core'
 
 export interface ProcessEnvSourceOptions {
   envVar: string

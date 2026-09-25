@@ -6,4 +6,4 @@ export {
   PUBLIC_MODULE_ID,
 } from './constants'
 export { type DevConfigOptions, loadDevConfig } from './dev-reader'
-export { type SenateConfigOptions, senateConfig } from './plugin'
+export { type ConfigKitOptions, configKit } from './plugin'

@@ -1,7 +1,7 @@
-import { createSyncConfigLoader } from '@senate/config-core'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import z from 'zod'
 
+import { createSyncConfigLoader } from '../core'
 import { createJsonScriptSource } from './json-script-source'
 
 function stubScript(id: string, textContent: string | null) {

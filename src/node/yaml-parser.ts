@@ -1,4 +1,5 @@
-import type { Parser } from '@senate/config-core'
 import { parse } from 'yaml'
+
+import type { Parser } from '../core'
 
 export const yamlParser: Parser = { parse }

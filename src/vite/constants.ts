@@ -1,0 +1,6 @@
+export const PACKAGE_NAME = '@yoshintame/config-kit'
+export const PUBLIC_MODULE_ID = 'virtual:config-kit'
+export const PRIVATE_MODULE_ID = 'virtual:config-kit/private'
+export const PUBLIC_ENV_VAR = 'APP_PUBLIC_CONFIG'
+export const PRIVATE_ENV_VAR = 'APP_PRIVATE_CONFIG'
+export const OVERLAY_ENV_VAR = 'APP_CONFIG_OVERLAY'

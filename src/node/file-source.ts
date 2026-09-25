@@ -1,10 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 
-import {
-  type Parser,
-  parseWith,
-  type SyncConfigSource,
-} from '@senate/config-core'
+import { type Parser, parseWith, type SyncConfigSource } from '../core'
 
 export interface FileSourceOptions {
   path: string

@@ -1,8 +1,4 @@
-import {
-  jsonParser,
-  parseWith,
-  type SyncConfigSource,
-} from '@senate/config-core'
+import { jsonParser, parseWith, type SyncConfigSource } from '../core'
 
 export const DEFAULT_CONFIG_ELEMENT_ID = '__CONFIG__'
 

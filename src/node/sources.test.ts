@@ -2,10 +2,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { jsonParser } from '@senate/config-core'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import z from 'zod'
 
+import { jsonParser } from '../core'
 import {
   createFileSource,
   createProcessEnvSource,

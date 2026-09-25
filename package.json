@@ -1,26 +1,131 @@
 {
-  "name": "ts-config",
-  "private": true,
-  "type": "module",
-  "workspaces": [
-    "packages/*"
+  "name": "@yoshintame/config-kit",
+  "version": "0.0.0-development",
+  "description": "Lazy, Zod-validated configuration with pluggable sources and a Vite plugin for runtime config injection",
+  "license": "MIT",
+  "author": "Mikhail Ivanov <m.ivanov0427@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yoshintame/config-kit.git"
+  },
+  "keywords": [
+    "config",
+    "configuration",
+    "zod",
+    "vite",
+    "vite-plugin",
+    "runtime-config",
+    "yaml",
+    "env"
   ],
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./node": {
+      "browser": {
+        "types": "./dist/node/browser.d.ts",
+        "default": "./dist/node/browser.js"
+      },
+      "types": "./dist/node/index.d.ts",
+      "default": "./dist/node/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser/index.d.ts",
+      "default": "./dist/browser/index.js"
+    },
+    "./vite": {
+      "types": "./dist/vite/index.d.ts",
+      "default": "./dist/vite/index.js"
+    },
+    "./vite/client": {
+      "types": "./client.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "client.d.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
+    "build": "tsup",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "check": "biome check --write",
-    "build": "bun run --filter '@senate/config-core' build && bun run --filter '@senate/config-node' --filter '@senate/config-browser' build && bun run --filter '@senate/vite-plugin-config' build",
-    "test:mutation": "stryker run"
+    "lint:package": "publint --strict && attw --pack . --profile esm-only",
+    "test:mutation": "stryker run",
+    "prepack": "bun run build",
+    "commitlint": "commitlint --edit",
+    "lint-staged": "bun exec lint-staged",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "es-toolkit": "^1.52.0",
+    "find-up": "^7.0.0",
+    "ts-pattern": "^5.9.0",
+    "yaml": "^2.8.0"
+  },
+  "peerDependencies": {
+    "vite": "^6.0.0 || ^7.0.0",
+    "zod": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.2",
+    "@biomejs/biome": "^2.4.15",
+    "@commitlint/cli": "^19.8.1",
+    "@commitlint/config-conventional": "^19.8.1",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
     "@stryker-mutator/core": "^10.0.0",
     "@stryker-mutator/typescript-checker": "^10.0.0",
     "@stryker-mutator/vitest-runner": "^10.0.0",
     "@types/node": "^22.15.32",
     "@yoshintame/biome-config": "^1.0.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.1.5",
+    "publint": "^0.3.12",
+    "semantic-release": "^24.2.7",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
+    "vite": "^6.3.6",
     "vitest": "^3.2.4",
     "zod": "^4.3.6"
+  },
+  "lint-staged": {
+    "*": [
+      "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true"
+    ]
+  },
+  "commitlint": {
+    "extends": [
+      "@commitlint/config-conventional"
+    ]
+  },
+  "release": {
+    "branches": [
+      "main"
+    ],
+    "plugins": [
+      "@semantic-release/commit-analyzer",
+      "@semantic-release/release-notes-generator",
+      "@semantic-release/changelog",
+      "@semantic-release/npm",
+      "@semantic-release/git",
+      "@semantic-release/github"
+    ]
   }
 }
