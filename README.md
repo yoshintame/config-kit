@@ -1,10 +1,10 @@
 # @yoshintame/config-kit
 
-Lazy, [Zod](https://zod.dev)-validated configuration with pluggable sources, plus a [Vite](https://vite.dev) plugin that injects runtime config into SPAs — one build image, many environments.
+Lazy, [Zod](https://zod.dev)-validated configuration with pluggable sources, plus a [Vite](https://vite.dev) plugin that injects runtime config into SPAs, so one build image serves many environments.
 
 - **Lazy by default.** Each schema validates its own section on first access; unrelated sections never block startup.
 - **Many consumers, one file.** Modules declare their own schemas over a shared config file.
-- **Pluggable sources.** Env vars, YAML/JSON files, a JSON `<script>` element, in-memory values — composed with `firstNonEmpty` and `mergeAll`.
+- **Pluggable sources.** Env vars, YAML/JSON files, a JSON `<script>` element, in-memory values, composed with `firstNonEmpty` and `mergeAll`.
 - **Runtime config for SPAs.** The Vite plugin serves config from YAML in dev and leaves an `envsubst` placeholder in `index.html` for production.
 
 ## Install
@@ -21,7 +21,7 @@ bun add @yoshintame/config-kit zod
 | `@yoshintame/config-kit/node` | Env var, file and YAML sources | Node, Bun |
 | `@yoshintame/config-kit/browser` | JSON `<script>` element source | Browser |
 | `@yoshintame/config-kit/vite` | Vite plugin, `loadDevConfig` | Node, Bun |
-| `@yoshintame/config-kit/vite/client` | Types for the virtual modules | — |
+| `@yoshintame/config-kit/vite/client` | Types for the virtual modules | Types only |
 
 The core entry imports nothing from `node:*`. Under the `browser` condition, `/node` resolves to a stub whose functions throw.
 
@@ -167,9 +167,9 @@ env:
 
 In dev the plugin reads `config.yaml` (found upward from the Vite root), deep-merges the gitignored `config.local.yaml` next to it and the file named in `APP_CONFIG_OVERLAY`, then takes:
 
-- `public` — the runtime config the browser sees. `APP_PUBLIC_CONFIG` (JSON) overrides it.
-- `private` — server-only values such as dev-server settings, merged over `public`. `APP_PRIVATE_CONFIG` overrides it.
-- `env` — build-time values for `import.meta.env`, dev only; real env vars and `.env` files win.
+- `public`: the runtime config the browser sees. `APP_PUBLIC_CONFIG` (JSON) overrides it.
+- `private`: server-only values such as dev-server settings, merged over `public`. `APP_PRIVATE_CONFIG` overrides it.
+- `env`: build-time values for `import.meta.env`, dev only; real env vars and `.env` files win.
 
 `loadDevConfig({ serverSchema, ...options })` reads the same files from `vite.config.ts` and returns the validated server config, for proxy targets and similar settings.
 
