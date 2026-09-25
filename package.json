@@ -1,0 +1,20 @@
+{
+  "name": "ts-config",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "biome check --write"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.32",
+    "@yoshintame/biome-config": "^1.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4",
+    "zod": "^4.3.6"
+  }
+}

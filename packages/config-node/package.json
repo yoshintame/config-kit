@@ -1,0 +1,20 @@
+{
+  "name": "@senate/config-node",
+  "version": "0.1.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "browser": "./src/browser.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@senate/config-core": "workspace:*",
+    "find-up": "^7.0.0",
+    "yaml": "^2.8.0"
+  },
+  "peerDependencies": {
+    "zod": "^4.0.0"
+  }
+}
