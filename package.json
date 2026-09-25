@@ -9,9 +9,13 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "check": "biome check --write",
-    "build": "bun run --filter '@senate/config-core' build && bun run --filter '@senate/config-node' --filter '@senate/config-browser' build && bun run --filter '@senate/vite-plugin-config' build"
+    "build": "bun run --filter '@senate/config-core' build && bun run --filter '@senate/config-node' --filter '@senate/config-browser' build && bun run --filter '@senate/vite-plugin-config' build",
+    "test:mutation": "stryker run"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^10.0.0",
+    "@stryker-mutator/typescript-checker": "^10.0.0",
+    "@stryker-mutator/vitest-runner": "^10.0.0",
     "@types/node": "^22.15.32",
     "@yoshintame/biome-config": "^1.0.0",
     "tsup": "^8.5.1",
