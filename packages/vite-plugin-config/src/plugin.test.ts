@@ -12,7 +12,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { build, createServer, type ViteDevServer } from 'vite'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -23,6 +23,15 @@ import { type SenateConfigOptions, senateConfig } from './plugin'
 
 type SourceModule = {
   source: { loadSync(): unknown; describe(): string }
+}
+
+const sourceResolve = {
+  alias: Object.fromEntries(
+    ['config-core', 'config-node', 'config-browser'].map((pkg) => [
+      `@senate/${pkg}`,
+      fileURLToPath(new URL(`../../${pkg}/src/index.ts`, import.meta.url)),
+    ]),
+  ),
 }
 
 const publicSchema = z
@@ -44,6 +53,7 @@ async function startDev(options: SenateConfigOptions = {}) {
   server = await createServer({
     root,
     configFile: false,
+    resolve: sourceResolve,
     logLevel: 'silent',
     server: { middlewareMode: true, ws: false },
     plugins: [senateConfig({ schema: publicSchema, ...options })],
@@ -179,6 +189,7 @@ describe('dev', () => {
     server = await createServer({
       root: appRoot,
       configFile: false,
+      resolve: sourceResolve,
       logLevel: 'silent',
       server: { middlewareMode: true, ws: false },
       plugins: [senateConfig({ schema: publicSchema })],
@@ -324,6 +335,7 @@ describe('yaml env section', () => {
     await build({
       root,
       configFile: false,
+      resolve: sourceResolve,
       logLevel: 'silent',
       plugins: [senateConfig({ schema: publicSchema, buildEnvSchema })],
     })
@@ -459,6 +471,29 @@ describe('watch', () => {
     expect(reloadModule).not.toHaveBeenCalled()
   })
 
+  test('recovering from an error clears the overlay with an update', async () => {
+    const dev = await startDev()
+    await loadSource(dev, '@senate/config')
+    const reloadModule = vi.spyOn(dev, 'reloadModule')
+
+    await changeYaml(dev, () => writeYaml('broken'))
+    expect(reloadModule).not.toHaveBeenCalled()
+
+    await changeYaml(dev, () => writeYaml('https://api.local'))
+    expect(reloadModule).toHaveBeenCalled()
+
+    reloadModule.mockClear()
+    await changeYaml(dev, () => writeYaml('https://api.local'))
+    expect(reloadModule).not.toHaveBeenCalled()
+  })
+
+  test('dev modules self-accept and keep their source across updates', async () => {
+    const dev = await startDev()
+    const result = await dev.transformRequest('@senate/config')
+    expect(result?.code).toContain('import.meta.hot.accept()')
+    expect(result?.code).toContain('import.meta.hot.data.source = source')
+  })
+
   test('unchanged content is a no-op', async () => {
     const dev = await startDev({ serverRestart: ['backend.*'] })
     await loadSource(dev, '@senate/config')
@@ -481,6 +516,7 @@ describe('build', () => {
     await build({
       root,
       configFile: false,
+      resolve: sourceResolve,
       logLevel: 'silent',
       plugins: [senateConfig({ schema: publicSchema, ...options })],
     })
@@ -493,15 +529,15 @@ describe('build', () => {
     return { html: readFileSync(join(dist, 'index.html'), 'utf-8'), js }
   }
 
-  test('injects placeholder script and reads config from window', async () => {
+  test('injects the JSON placeholder and reads config from it', async () => {
     const { html, js } = await runBuild()
     expect(html).toMatch(
-      /<script>window\.__CONFIG__ = \$\{APP_PUBLIC_CONFIG\}<\/script>/,
+      /<script type="application\/json" id="__CONFIG__">\$\{APP_PUBLIC_CONFIG\}<\/script>/,
     )
     expect(html.indexOf('__CONFIG__')).toBeLessThan(
       html.indexOf('type="module"'),
     )
-    expect(js).toContain('globalThis.__CONFIG__')
+    expect(js).toContain('getElementById')
     expect(js).not.toContain('api.local')
   })
 
@@ -541,13 +577,13 @@ describe('build', () => {
   test('fails on invalid build env', async () => {
     writeFileSync(join(root, '.env.production'), 'VITE_FLAG=maybe\n')
     await expect(runBuild({ buildEnvSchema })).rejects.toThrow(
-      /Build env validation failed/,
+      /Config validation failed \(loaded from build env\)/,
     )
   })
 })
 
 describe('ssr build', () => {
-  test('virtual modules read window and env at runtime', async () => {
+  test('virtual modules read env at runtime', async () => {
     writeFileSync(
       join(root, 'src/server.ts'),
       [
@@ -558,6 +594,7 @@ describe('ssr build', () => {
     await build({
       root,
       configFile: false,
+      resolve: sourceResolve,
       logLevel: 'silent',
       build: {
         ssr: 'src/server.ts',
@@ -573,21 +610,19 @@ describe('ssr build', () => {
       privateSource: SourceModule['source']
     }
 
-    vi.stubGlobal('__CONFIG__', { from: 'window' })
-    expect(mod.publicSource.loadSync()).toEqual({ from: 'window' })
-    expect(mod.publicSource.describe()).toBe('window.__CONFIG__')
-    vi.unstubAllGlobals()
-
+    expect(mod.publicSource.loadSync()).toBeUndefined()
     expect(mod.privateSource.loadSync()).toBeUndefined()
-    process.env.APP_PUBLIC_CONFIG = JSON.stringify({ a: 1, shared: 'public' })
-    process.env.APP_PRIVATE_CONFIG = JSON.stringify({ b: 2, shared: 'private' })
+
+    process.env.APP_PUBLIC_CONFIG = JSON.stringify({ a: 1, db: { host: 'h' } })
+    process.env.APP_PRIVATE_CONFIG = JSON.stringify({ db: { password: 'p' } })
+    expect(mod.publicSource.loadSync()).toEqual({ a: 1, db: { host: 'h' } })
+    expect(mod.publicSource.describe()).toBe('env APP_PUBLIC_CONFIG')
     expect(mod.privateSource.loadSync()).toEqual({
       a: 1,
-      b: 2,
-      shared: 'private',
+      db: { host: 'h', password: 'p' },
     })
     expect(mod.privateSource.describe()).toBe(
-      'env APP_PUBLIC_CONFIG + APP_PRIVATE_CONFIG',
+      'merge of [env APP_PUBLIC_CONFIG, env APP_PRIVATE_CONFIG]',
     )
   })
 })

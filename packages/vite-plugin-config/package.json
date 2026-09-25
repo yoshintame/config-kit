@@ -21,9 +21,12 @@
     "build": "tsup src/index.ts --format esm --dts --clean --tsconfig ../../tsconfig.json"
   },
   "dependencies": {
+    "@senate/config-browser": "workspace:*",
     "@senate/config-core": "workspace:*",
     "@senate/config-node": "workspace:*",
-    "find-up": "^7.0.0"
+    "es-toolkit": "^1.52.0",
+    "find-up": "^7.0.0",
+    "ts-pattern": "^5.9.0"
   },
   "devDependencies": {
     "vite": "^6.3.6"

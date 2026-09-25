@@ -1,186 +1,152 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
+import { DEFAULT_CONFIG_ELEMENT_ID } from '@senate/config-browser'
+import { parseOrThrow } from '@senate/config-core'
+import { isEqual } from 'es-toolkit'
+import { match } from 'ts-pattern'
 import { loadEnv, type ModuleNode, type Plugin, type ViteDevServer } from 'vite'
-import { type ZodType, z } from 'zod'
+import type { ZodType } from 'zod'
 
 import { changedPaths, matchesAny } from './changed-paths'
 import {
+  PRIVATE_ENV_VAR,
+  PRIVATE_MODULE_ID,
+  PUBLIC_ENV_VAR,
+  PUBLIC_MODULE_ID,
+} from './constants'
+import {
   createDevReader,
   type DevConfigOptions,
+  type DevReader,
   type DevState,
 } from './dev-reader'
 import { renderEnvDts } from './env-dts'
+import { buildModule, devModule, type ModuleKind } from './virtual-modules'
 
-export const PUBLIC_MODULE_ID = '@senate/config'
-export const PRIVATE_MODULE_ID = '@senate/config/private'
-const RESOLVED_PUBLIC_ID = '\0senate-config:public'
-const RESOLVED_PRIVATE_ID = '\0senate-config:private'
-
-export type SenateConfigOptions = DevConfigOptions & {
+export interface SenateConfigOptions extends DevConfigOptions {
   buildEnvSchema?: ZodType
-  globalKey?: string
+  elementId?: string
   watch?: boolean
   serverRestart?: string[]
   fullReload?: string[]
   envDts?: string | false
 }
 
-function staticSourceModule(raw: unknown, origin: string): string {
-  return [
-    `const raw = ${JSON.stringify(raw)}`,
-    `export const source = { loadSync: () => raw, describe: () => ${JSON.stringify(origin)} }`,
-  ].join('\n')
+type Reaction = 'none' | 'restart' | 'full-reload' | 'hmr'
+
+const RESOLVED_IDS: Record<ModuleKind, string> = {
+  public: '\0senate-config:public',
+  server: '\0senate-config:private',
 }
+const PLUGIN_FILE = fileURLToPath(import.meta.url)
 
-export function senateConfig(options: SenateConfigOptions = {}): Plugin {
-  const publicEnvVar = options.publicEnvVar ?? 'APP_PUBLIC_CONFIG'
-  const privateEnvVar = options.privateEnvVar ?? 'APP_PRIVATE_CONFIG'
-  const globalKey = options.globalKey ?? '__CONFIG__'
-
-  let command: 'serve' | 'build'
-  let reader: ReturnType<typeof createDevReader> | undefined
-  let state: DevState | undefined
-
-  function configModules(server: ViteDevServer): ModuleNode[] {
-    return [RESOLVED_PUBLIC_ID, RESOLVED_PRIVATE_ID]
-      .map((id) => server.moduleGraph.getModuleById(id))
-      .filter((mod): mod is ModuleNode => mod !== undefined)
-  }
+export function senateConfig({
+  buildEnvSchema,
+  elementId = DEFAULT_CONFIG_ELEMENT_ID,
+  watch = true,
+  serverRestart = [],
+  fullReload = [],
+  envDts = false,
+  publicEnvVar = PUBLIC_ENV_VAR,
+  privateEnvVar = PRIVATE_ENV_VAR,
+  ...devOptions
+}: SenateConfigOptions = {}): Plugin {
+  let command: 'serve' | 'build' = 'serve'
+  let dev: { reader: DevReader; state: DevState } | undefined
+  let failed = false
 
   async function handleChange(server: ViteDevServer) {
-    if (!reader) return
-    const prev = state
-    try {
-      state = reader.load()
-    } catch (err) {
-      const message = (err as Error).message
-      server.config.logger.error(message, { timestamp: true })
-      server.ws.send({ type: 'error', err: { message, stack: '' } })
+    if (!dev) return
+    const next = tryLoad(dev.reader, server)
+    if (!next) {
+      failed = true
       return
     }
-
-    const envChanged = changedPaths(prev?.env, state.env).length > 0
-    const paths = changedPaths(prev?.server, state.server)
-    if (!envChanged && paths.length === 0) return
-
-    if (
-      envChanged ||
-      paths.some((p) => matchesAny(p, options.serverRestart ?? []))
-    ) {
-      await server.restart()
-      return
-    }
-
-    const modules = configModules(server)
-    if (paths.some((p) => matchesAny(p, options.fullReload ?? []))) {
-      for (const mod of modules) server.moduleGraph.invalidateModule(mod)
-      server.ws.send({ type: 'full-reload' })
-      return
-    }
-
-    for (const mod of modules) await server.reloadModule(mod)
+    const reaction = reactionFor({
+      previous: dev.state,
+      next,
+      recovered: failed,
+      serverRestart,
+      fullReload,
+    })
+    dev.state = next
+    failed = false
+    await match(reaction)
+      .with('none', () => undefined)
+      .with('restart', () => server.restart())
+      .with('full-reload', () => fullReloadConfig(server))
+      .with('hmr', () => hotReloadConfig(server))
+      .exhaustive()
   }
 
   return {
     name: 'senate-config',
+    enforce: 'pre',
 
     config(userConfig, env) {
       command = env.command
       const root = path.resolve(userConfig.root ?? process.cwd())
-      if (env.command === 'serve') {
-        reader = createDevReader(options, root)
-        state = reader.load()
-      }
-
-      const schema = options.buildEnvSchema
-      if (!schema) return
-
-      const envDir =
-        typeof userConfig.envDir === 'string'
-          ? path.resolve(root, userConfig.envDir)
-          : root
-      const result = schema.safeParse({
-        ...state?.env,
-        ...loadEnv(env.mode, envDir, ''),
-      })
-      if (!result.success) {
-        throw new Error(
-          `Build env validation failed:\n${z.prettifyError(result.error)}`,
+      if (command === 'serve') {
+        const reader = createDevReader(
+          { ...devOptions, publicEnvVar, privateEnvVar },
+          root,
         )
+        dev = { reader, state: reader.load() }
       }
-
-      if (options.envDts) {
-        const file = path.resolve(root, options.envDts)
-        const content = renderEnvDts(schema)
-        if (!existsSync(file) || readFileSync(file, 'utf-8') !== content) {
-          writeFileSync(file, content)
-        }
-      }
-
+      if (!buildEnvSchema) return
       return {
-        define: Object.fromEntries(
-          Object.entries(result.data as Record<string, unknown>).map(
-            ([key, value]) => [`import.meta.env.${key}`, JSON.stringify(value)],
-          ),
-        ),
+        define: defineBuildEnv({
+          schema: buildEnvSchema,
+          env: {
+            ...dev?.state.env,
+            ...loadEnv(env.mode, resolveEnvDir(root, userConfig.envDir), ''),
+          },
+          dtsFile: envDts ? path.resolve(root, envDts) : undefined,
+        }),
       }
     },
 
     configureServer(server) {
-      if (options.watch === false || !reader) return
-      const watched = new Set(reader.watchedFiles)
-      server.watcher.add([...watched])
+      const files = new Set(watch ? (dev?.reader.watchedFiles ?? []) : [])
+      if (files.size === 0) return
+      server.watcher.add([...files])
       const onFile = (file: string) => {
-        if (watched.has(path.resolve(file))) void handleChange(server)
+        if (files.has(path.resolve(file))) void handleChange(server)
       }
       server.watcher.on('change', onFile)
       server.watcher.on('add', onFile)
       server.watcher.on('unlink', onFile)
     },
 
-    resolveId(id, _importer, resolveOptions) {
-      if (id === PUBLIC_MODULE_ID) return RESOLVED_PUBLIC_ID
-      if (id === PRIVATE_MODULE_ID) {
-        if (!resolveOptions?.ssr) {
-          this.error(`${PRIVATE_MODULE_ID} is server-only`)
-        }
-        return RESOLVED_PRIVATE_ID
-      }
+    resolveId(id, importer, options) {
+      return match(id)
+        .with(PUBLIC_MODULE_ID, () => RESOLVED_IDS.public)
+        .with(PRIVATE_MODULE_ID, () =>
+          options?.ssr
+            ? RESOLVED_IDS.server
+            : this.error(`${PRIVATE_MODULE_ID} is server-only`),
+        )
+        .when(
+          () => isVirtualModule(importer),
+          () => this.resolve(id, PLUGIN_FILE, { ...options, skipSelf: true }),
+        )
+        .otherwise(() => null)
     },
 
-    load(id) {
-      if (id === RESOLVED_PUBLIC_ID) {
-        if (state) {
-          return staticSourceModule(state.public, state.origin)
-        }
-        return [
-          'export const source = {',
-          `  loadSync: () => globalThis[${JSON.stringify(globalKey)}],`,
-          `  describe: () => ${JSON.stringify(`window.${globalKey}`)},`,
-          '}',
-        ].join('\n')
-      }
-
-      if (id === RESOLVED_PRIVATE_ID) {
-        if (state) {
-          return staticSourceModule(state.server, state.origin)
-        }
-        return [
-          'const read = (name) => {',
-          '  const value = process.env[name]',
-          '  return value ? JSON.parse(value) : undefined',
-          '}',
-          'export const source = {',
-          '  loadSync() {',
-          `    const pub = read(${JSON.stringify(publicEnvVar)})`,
-          `    const priv = read(${JSON.stringify(privateEnvVar)})`,
-          '    return pub === undefined && priv === undefined ? undefined : { ...pub, ...priv }',
-          '  },',
-          `  describe: () => ${JSON.stringify(`env ${publicEnvVar} + ${privateEnvVar}`)},`,
-          '}',
-        ].join('\n')
-      }
+    load(id, options) {
+      const kind = moduleKindOf(id)
+      if (!kind) return
+      return dev
+        ? devModule(dev.state[kind])
+        : buildModule({
+            kind,
+            ssr: options?.ssr === true,
+            elementId,
+            publicEnvVar,
+            privateEnvVar,
+          })
     },
 
     transformIndexHtml() {
@@ -188,10 +154,110 @@ export function senateConfig(options: SenateConfigOptions = {}): Plugin {
       return [
         {
           tag: 'script',
-          children: `window.${globalKey} = \${${publicEnvVar}}`,
+          attrs: { type: 'application/json', id: elementId },
+          children: `\${${publicEnvVar}}`,
           injectTo: 'head-prepend',
         },
       ]
     },
   }
+}
+
+function tryLoad(reader: DevReader, server: ViteDevServer) {
+  try {
+    return reader.load()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    server.config.logger.error(message, { timestamp: true })
+    server.ws.send({ type: 'error', err: { message, stack: '' } })
+    return undefined
+  }
+}
+
+function reactionFor({
+  previous,
+  next,
+  recovered,
+  serverRestart,
+  fullReload,
+}: {
+  previous: DevState
+  next: DevState
+  recovered: boolean
+  serverRestart: string[]
+  fullReload: string[]
+}): Reaction {
+  const paths = changedPaths(previous.server.raw, next.server.raw)
+  const touches = (patterns: string[]) =>
+    paths.some((changed) => matchesAny(changed, patterns))
+  return match({
+    envChanged: !isEqual(previous.env, next.env),
+    restart: touches(serverRestart),
+    reload: touches(fullReload),
+    changed: paths.length > 0,
+    recovered,
+  })
+    .returnType<Reaction>()
+    .with({ envChanged: true }, { restart: true }, () => 'restart')
+    .with({ reload: true }, () => 'full-reload')
+    .with({ changed: true }, { recovered: true }, () => 'hmr')
+    .otherwise(() => 'none')
+}
+
+function configModules(server: ViteDevServer): ModuleNode[] {
+  return Object.values(RESOLVED_IDS)
+    .map((id) => server.moduleGraph.getModuleById(id))
+    .filter((mod) => mod !== undefined)
+}
+
+function fullReloadConfig(server: ViteDevServer) {
+  for (const mod of configModules(server)) {
+    server.moduleGraph.invalidateModule(mod)
+  }
+  server.ws.send({ type: 'full-reload' })
+}
+
+async function hotReloadConfig(server: ViteDevServer) {
+  for (const mod of configModules(server)) await server.reloadModule(mod)
+}
+
+function isVirtualModule(id: string | undefined): boolean {
+  return Object.values(RESOLVED_IDS).includes(id ?? '')
+}
+
+function moduleKindOf(id: string): ModuleKind | undefined {
+  return (Object.keys(RESOLVED_IDS) as ModuleKind[]).find(
+    (kind) => RESOLVED_IDS[kind] === id,
+  )
+}
+
+function defineBuildEnv({
+  schema,
+  env,
+  dtsFile,
+}: {
+  schema: ZodType
+  env: Record<string, string>
+  dtsFile: string | undefined
+}): Record<string, string> {
+  const parsed = parseOrThrow(schema, env, 'build env') as Record<
+    string,
+    unknown
+  >
+  if (dtsFile) writeIfChanged(dtsFile, renderEnvDts(schema))
+  return Object.fromEntries(
+    Object.entries(parsed).map(([key, value]) => [
+      `import.meta.env.${key}`,
+      JSON.stringify(value),
+    ]),
+  )
+}
+
+function resolveEnvDir(root: string, envDir: unknown): string {
+  return typeof envDir === 'string' ? path.resolve(root, envDir) : root
+}
+
+function writeIfChanged(file: string, content: string) {
+  const current = existsSync(file) ? readFileSync(file, 'utf-8') : undefined
+  if (current !== content) writeFileSync(file, content)
 }

@@ -1,36 +1,6 @@
+import { uniq } from 'es-toolkit'
+import { match, P } from 'ts-pattern'
 import { type ZodType, z } from 'zod'
-
-type JsonSchema = {
-  type?: string | string[]
-  enum?: unknown[]
-  const?: unknown
-  anyOf?: JsonSchema[]
-  properties?: Record<string, JsonSchema>
-  required?: string[]
-}
-
-function tsType(schema: JsonSchema): string {
-  if (schema.const !== undefined) return JSON.stringify(schema.const)
-  if (schema.enum) return schema.enum.map((v) => JSON.stringify(v)).join(' | ')
-  if (schema.anyOf) return schema.anyOf.map(tsType).join(' | ')
-  const types = Array.isArray(schema.type) ? schema.type : [schema.type]
-  const mapped = types.map((type) => {
-    switch (type) {
-      case 'string':
-        return 'string'
-      case 'number':
-      case 'integer':
-        return 'number'
-      case 'boolean':
-        return 'boolean'
-      case 'null':
-        return 'null'
-      default:
-        return 'unknown'
-    }
-  })
-  return [...new Set(mapped)].join(' | ')
-}
 
 export function renderEnvDts(schema: ZodType): string {
   const json = z.toJSONSchema(schema, {
@@ -52,4 +22,35 @@ export function renderEnvDts(schema: ZodType): string {
     '}',
     '',
   ].join('\n')
+}
+
+interface JsonSchema {
+  type?: string | string[]
+  enum?: unknown[]
+  const?: unknown
+  anyOf?: JsonSchema[]
+  properties?: Record<string, JsonSchema>
+  required?: string[]
+}
+
+function tsType(schema: JsonSchema): string {
+  return match(schema)
+    .when(
+      ({ const: value }) => value !== undefined,
+      ({ const: value }) => JSON.stringify(value),
+    )
+    .with({ enum: P.array() }, ({ enum: values }) =>
+      values.map((value) => JSON.stringify(value)).join(' | '),
+    )
+    .with({ anyOf: P.array() }, ({ anyOf }) => anyOf.map(tsType).join(' | '))
+    .otherwise(({ type }) => uniq([type].flat().map(primitiveType)).join(' | '))
+}
+
+function primitiveType(type: string | undefined): string {
+  return match(type)
+    .with('string', () => 'string')
+    .with(P.union('number', 'integer'), () => 'number')
+    .with('boolean', () => 'boolean')
+    .with('null', () => 'null')
+    .otherwise(() => 'unknown')
 }

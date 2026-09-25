@@ -1,6 +1,4 @@
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
+import { isEqual, isPlainObject } from 'es-toolkit'
 
 export function changedPaths(
   prev: unknown,
@@ -13,17 +11,16 @@ export function changedPaths(
       changedPaths(prev[key], next[key], prefix ? `${prefix}.${key}` : key),
     )
   }
-  return JSON.stringify(prev) === JSON.stringify(next) ? [] : [prefix]
+  return isEqual(prev, next) ? [] : [prefix]
 }
 
 export function matchesAny(path: string, patterns: string[]): boolean {
-  return patterns.some((pattern) => {
-    const base = pattern.endsWith('.*') ? pattern.slice(0, -2) : pattern
-    return (
-      path === '' ||
-      path === base ||
-      path.startsWith(`${base}.`) ||
-      base.startsWith(`${path}.`)
-    )
-  })
+  if (path === '') return patterns.length > 0
+  return patterns
+    .map((pattern) => pattern.replace(/\.\*$/, ''))
+    .some((base) => [isWithin(path, base), isWithin(base, path)].some(Boolean))
+}
+
+function isWithin(inner: string, outer: string): boolean {
+  return `${inner}.`.startsWith(`${outer}.`)
 }

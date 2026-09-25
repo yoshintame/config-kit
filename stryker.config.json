@@ -1,14 +1,11 @@
 {
   "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
-  "packageManager": "npm",
   "plugins": [
     "@stryker-mutator/vitest-runner",
     "@stryker-mutator/typescript-checker"
   ],
   "testRunner": "vitest",
-  "checkers": [
-    "typescript"
-  ],
+  "checkers": ["typescript"],
   "tsconfigFile": "tsconfig.json",
   "coverageAnalysis": "perTest",
   "mutate": [
@@ -17,11 +14,7 @@
     "!packages/*/src/index.ts",
     "!packages/config-node/src/browser.ts"
   ],
-  "reporters": [
-    "clear-text",
-    "progress",
-    "html"
-  ],
+  "reporters": ["clear-text", "progress", "html"],
   "htmlReporter": {
     "fileName": "reports/mutation/index.html"
   },

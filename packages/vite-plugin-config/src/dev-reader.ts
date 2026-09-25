@@ -1,9 +1,9 @@
 import path from 'node:path'
 
 import {
-  createSyncConfigLoader,
-  firstNonEmpty,
+  deepMerge,
   mergeAll,
+  parseOrThrow,
   type SyncConfigSource,
 } from '@senate/config-core'
 import {
@@ -11,117 +11,128 @@ import {
   createProcessEnvSource,
   yamlParser,
 } from '@senate/config-node'
+import { isNil, isPlainObject, mapValues, omitBy } from 'es-toolkit'
 import { findUpSync } from 'find-up'
 import type { ZodType, z } from 'zod'
 
-export type DevConfigOptions = {
+import { OVERLAY_ENV_VAR, PRIVATE_ENV_VAR, PUBLIC_ENV_VAR } from './constants'
+
+export interface DevConfigOptions {
   schema?: ZodType
   serverSchema?: ZodType
   publicEnvVar?: string
   privateEnvVar?: string
   yamlFile?: string
   yamlPath?: string
-  localYamlFile?: string
+  localYamlFile?: string | false
+  overlayEnvVar?: string
 }
 
-export type DevState = {
-  public: unknown
-  server: unknown
-  env: Record<string, string>
+export interface LoadedConfig {
+  raw: unknown
   origin: string
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+export interface DevState {
+  public: LoadedConfig
+  server: LoadedConfig
+  serverConfig: unknown
+  env: Record<string, string>
 }
 
-function section(source: SyncConfigSource, key: string): SyncConfigSource {
-  return {
-    loadSync() {
-      const value = source.loadSync()
-      return isPlainObject(value) ? value[key] : undefined
-    },
-    describe: () => `${source.describe()} (${key})`,
+export interface DevReader {
+  load(): DevState
+  watchedFiles: string[]
+}
+
+export function loadDevConfig<S extends ZodType>({
+  root = process.cwd(),
+  ...options
+}: DevConfigOptions & { serverSchema: S; root?: string }): z.output<S> {
+  return createDevReader(options, root).load().serverConfig as z.output<S>
+}
+
+export function createDevReader(
+  {
+    schema,
+    serverSchema,
+    publicEnvVar = PUBLIC_ENV_VAR,
+    privateEnvVar = PRIVATE_ENV_VAR,
+    yamlFile = 'config.yaml',
+    yamlPath,
+    localYamlFile = 'config.local.yaml',
+    overlayEnvVar = OVERLAY_ENV_VAR,
+  }: DevConfigOptions,
+  root: string,
+): DevReader {
+  const configPath = yamlPath
+    ? path.resolve(root, yamlPath)
+    : (findUpSync(yamlFile, { cwd: root }) ?? path.resolve(root, yamlFile))
+  const overlays = [
+    localYamlFile === false ? undefined : localYamlFile,
+    process.env[overlayEnvVar],
+  ]
+    .filter((file) => !isNil(file))
+    .map((file) => path.resolve(path.dirname(configPath), file))
+  const watchedFiles = [configPath, ...overlays]
+  const yaml = mergeAll(
+    watchedFiles.map((file) =>
+      createFileSource({ path: file, parser: yamlParser }),
+    ),
+  )
+  const publicEnv = createProcessEnvSource({ envVar: publicEnvVar })
+  const privateEnv = createProcessEnvSource({ envVar: privateEnvVar })
+
+  function load(): DevState {
+    const document = yaml.loadSync()
+    const sections = isPlainObject(document) ? document : {}
+    const inYaml = (key: string): LoadedConfig => ({
+      raw: sections[key],
+      origin: `${yaml.describe()} (${key})`,
+    })
+
+    const publicConfig = fromEnvOr(publicEnv, inYaml('public'))
+    if (publicConfig.raw === undefined) {
+      throw new Error(
+        `Config not found in any source: ${publicEnv.describe()}, ${publicConfig.origin}`,
+      )
+    }
+    if (schema) parseOrThrow(schema, publicConfig.raw, publicConfig.origin)
+
+    const privateConfig = fromEnvOr(privateEnv, inYaml('private'))
+    const server: LoadedConfig =
+      privateConfig.raw === undefined
+        ? publicConfig
+        : {
+            raw: deepMerge(publicConfig.raw, privateConfig.raw),
+            origin: `${publicConfig.origin} + ${privateConfig.origin}`,
+          }
+
+    return {
+      public: publicConfig,
+      server,
+      serverConfig: serverSchema
+        ? parseOrThrow(serverSchema, server.raw, server.origin)
+        : server.raw,
+      env: stringifyEnv(sections.env),
+    }
   }
+
+  return { load, watchedFiles }
+}
+
+function fromEnvOr(
+  env: SyncConfigSource,
+  fallback: LoadedConfig,
+): LoadedConfig {
+  const raw = env.loadSync()
+  return raw === undefined ? fallback : { raw, origin: env.describe() }
 }
 
 function stringifyEnv(value: unknown): Record<string, string> {
-  if (!isPlainObject(value)) return {}
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, v]) => v !== undefined && v !== null)
-      .map(([key, v]) => [
-        key,
-        typeof v === 'object' ? JSON.stringify(v) : String(v),
-      ]),
-  )
-}
-
-export function parseConfig<S extends ZodType>(
-  schema: S,
-  raw: unknown,
-  origin: string,
-): z.output<S> {
-  const loader = createSyncConfigLoader({
-    loadSync: () => raw,
-    describe: () => origin,
-  })
-  const config = loader.defineConfig(schema)
-  loader.validateAll()
-  return config
-}
-
-export function createDevReader(options: DevConfigOptions, root: string) {
-  const publicEnvVar = options.publicEnvVar ?? 'APP_PUBLIC_CONFIG'
-  const privateEnvVar = options.privateEnvVar ?? 'APP_PRIVATE_CONFIG'
-  const yamlPath = options.yamlPath
-    ? path.resolve(root, options.yamlPath)
-    : findUpSync(options.yamlFile ?? 'config.yaml', { cwd: root })
-  const localYamlPath = path.resolve(
-    yamlPath ? path.dirname(yamlPath) : root,
-    options.localYamlFile ?? 'config.local.yaml',
-  )
-  const yaml = mergeAll([
-    ...(yamlPath
-      ? [createFileSource({ path: yamlPath, parser: yamlParser })]
-      : []),
-    createFileSource({ path: localYamlPath, parser: yamlParser }),
-  ])
-
-  function load(): DevState {
-    const publicSource = firstNonEmpty([
-      createProcessEnvSource({ envVar: publicEnvVar }),
-      section(yaml, 'public'),
-    ])
-    const publicRaw = publicSource.loadSync()
-    const origin = publicSource.describe()
-    if (options.schema) parseConfig(options.schema, publicRaw, origin)
-
-    const privateRaw =
-      createProcessEnvSource({ envVar: privateEnvVar }).loadSync() ??
-      section(yaml, 'private').loadSync()
-    const serverRaw = { ...(publicRaw as object), ...(privateRaw as object) }
-    if (options.serverSchema) {
-      parseConfig(options.serverSchema, serverRaw, origin)
-    }
-
-    return {
-      public: publicRaw,
-      server: serverRaw,
-      env: stringifyEnv(section(yaml, 'env').loadSync()),
-      origin,
-    }
-  }
-
-  return {
-    load,
-    watchedFiles: [...(yamlPath ? [yamlPath] : []), localYamlPath],
-  }
-}
-
-export function loadDevConfig<S extends ZodType>(
-  options: DevConfigOptions & { serverSchema: S; root?: string },
-): z.output<S> {
-  const state = createDevReader(options, options.root ?? process.cwd()).load()
-  return parseConfig(options.serverSchema, state.server, state.origin)
+  return isPlainObject(value)
+    ? mapValues(omitBy(value, isNil), (entry) =>
+        typeof entry === 'object' ? JSON.stringify(entry) : String(entry),
+      )
+    : {}
 }
