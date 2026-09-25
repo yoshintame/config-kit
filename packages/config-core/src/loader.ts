@@ -18,7 +18,8 @@ type RegisteredSchema = {
 }
 
 function schemaName(schema: ZodType): string | undefined {
-  return schema.meta()?.id ?? schema.description
+  const meta = schema.meta()
+  return meta?.id ?? meta?.title ?? schema.description
 }
 
 function topKeysOf(schema: ZodType): string[] | undefined {

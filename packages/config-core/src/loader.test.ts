@@ -41,6 +41,14 @@ describe('createSyncConfigLoader', () => {
     )
   })
 
+  test('validation error names schema via meta title', () => {
+    const loader = createSyncConfigLoader(createInMemorySource({}))
+    const config = loader.defineConfig(
+      z.object({ a: z.number() }).meta({ title: 'crm-public' }),
+    )
+    expect(() => config.a).toThrow(/for schema 'crm-public'/)
+  })
+
   test('validation error falls back to schema description', () => {
     const loader = createSyncConfigLoader(createInMemorySource({}))
     const config = loader.defineConfig(

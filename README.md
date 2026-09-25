@@ -55,7 +55,7 @@ Object.keys(config)       // ['api']
 { ...config }             // shallow copy
 ```
 
-Имя схемы в ошибке берётся из `.meta({ id })`, иначе из `.describe()`:
+Имя схемы в ошибке берётся из `.meta({ id })`, `.meta({ title })`, иначе из `.describe()`. `id` уникален в глобальном реестре zod: повторное выполнение модуля со схемой (HMR, `vi.resetModules`) бросает «ID already exists» — для модулей, которые могут перевыполняться, используй `title`:
 
 ```
 Config validation failed for schema 'crm-api' (loaded from file /repo/senate-e2e.config.yaml):
@@ -182,6 +182,10 @@ Watch yaml в dev — реакция по изменённым путям:
 | невалидный конфиг | error overlay, предыдущий конфиг остаётся |
 
 Build env: `buildEnvSchema` валидирует env на старте dev/build — dev: yaml-секция `env` (скаляры приводятся к строкам, как в `.env`) под `loadEnv` (все префиксы), build: только `loadEnv`. Результат с coercion и defaults подставляется через `define` в `import.meta.env.*`. `envDts` генерирует `ImportMetaEnv`.
+
+## Сборка
+
+`bun run build` — tsup собирает каждый пакет в `dist/` (ESM + `.d.ts`); потребители резолвят `dist`, внутри репо тесты и `tsc` идут по export-condition `source` на исходники. Потребитель через `bun link` видит изменения только после пересборки.
 
 ## Зависимости
 
