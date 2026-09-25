@@ -1,27 +1,62 @@
-# ts-config
+# @yoshintame/config-kit
 
-Generic ленивый загрузчик конфига с zod-валидацией. Пакеты:
+Lazy, [Zod](https://zod.dev)-validated configuration with pluggable sources, plus a [Vite](https://vite.dev) plugin that injects runtime config into SPAs — one build image, many environments.
 
-- `@senate/config-core` — core: loader, контракт источника, `firstNonEmpty`, in-memory source. Ноль импортов из `node:*`, browser-safe.
-- `@senate/config-node` — source-адаптеры: env, файл, yaml+env с findUp. Под `browser` condition — stub с ошибкой.
-- `@senate/config-browser` — source-адаптеры для браузера: JSON из `<script type="application/json">`.
-- `@senate/vite-plugin-config` — Vite-интеграция: virtual modules, HMR конфига, build env через `define`, `env.d.ts`.
+- **Lazy by default.** Each schema validates its own section on first access; unrelated sections never block startup.
+- **Many consumers, one file.** Modules declare their own schemas over a shared config file.
+- **Pluggable sources.** Env vars, YAML/JSON files, a JSON `<script>` element, in-memory values — composed with `firstNonEmpty` and `mergeAll`.
+- **Runtime config for SPAs.** The Vite plugin serves config from YAML in dev and leaves an `envsubst` placeholder in `index.html` for production.
 
-Пример wrapper-а в корне проекта (`config.ts`):
+## Install
+
+```sh
+bun add @yoshintame/config-kit zod
+```
+
+`zod@^4` is a peer dependency. The Vite plugin also needs `vite@^6 || ^7`.
+
+| Entry point | Contents | Runtime |
+| --- | --- | --- |
+| `@yoshintame/config-kit` | Loader, source contract, composition, in-memory source | Any |
+| `@yoshintame/config-kit/node` | Env var, file and YAML sources | Node, Bun |
+| `@yoshintame/config-kit/browser` | JSON `<script>` element source | Browser |
+| `@yoshintame/config-kit/vite` | Vite plugin, `loadDevConfig` | Node, Bun |
+| `@yoshintame/config-kit/vite/client` | Types for the virtual modules | — |
+
+The core entry imports nothing from `node:*`. Under the `browser` condition, `/node` resolves to a stub whose functions throw.
+
+## Quick start
 
 ```ts
-import { createYamlConfigLoader } from '@senate/config-node'
+import { createYamlConfigLoader } from '@yoshintame/config-kit/node'
 
-export const { defineConfig, loadRaw, reset } = createYamlConfigLoader({
-  envVar: 'SENATE_E2E_CONFIG',        // имя env-переменной с JSON
-  yamlFile: 'senate-e2e.config.yaml', // имя yaml (findUp от cwd)
-  yamlPath: undefined,                // явный путь — override для тестов
+export const { defineConfig } = createYamlConfigLoader({
+  envVar: 'APP_CONFIG',
+  yamlFile: 'app.config.yaml',
 })
 ```
 
+```ts
+import { z } from 'zod'
+
+import { defineConfig } from './config'
+
+export const dbConfig = defineConfig(
+  z
+    .object({
+      db: z.object({ url: z.url(), poolSize: z.number().default(10) }),
+    })
+    .meta({ title: 'db' }),
+)
+
+dbConfig.db.url
+```
+
+The config comes from the JSON in `APP_CONFIG` if it is set, otherwise from `app.config.yaml`, found by searching up from the working directory. Nothing is read or validated until `dbConfig.db.url` is accessed.
+
 ## Core
 
-### `SyncConfigSource`
+### Sources
 
 ```ts
 interface SyncConfigSource {
@@ -31,172 +66,152 @@ interface SyncConfigSource {
 }
 ```
 
-`describe()` попадает в сообщения об ошибках (`loaded from file /path/senate-e2e.config.yaml`). `ConfigSource` — alias.
+A source returns the raw config or `undefined` when it has nothing. `describe()` appears in error messages. Middleware such as decryption or interpolation wraps a source and returns a source.
 
-### `createSyncConfigLoader(source): SyncConfigLoader`
+### `createSyncConfigLoader(source)`
 
-#### `defineConfig(schema): z.infer<schema>`
+- **`defineConfig(schema)`** returns a read-only proxy over the parsed output of an object schema. The first property access loads the source and validates; the result is cached. Writes and deletes throw.
+- **`validateAll()`** validates every registered schema now and throws one error listing all failures.
+- **`assertOnlyKnownTopKeys()`** throws if the raw config has top-level keys that no registered object schema declares. Use it in single-schema apps together with `validateAll()`; skip it when several modules share one file.
+- **`onChange(callback)`** subscribes to `source.watch`. On change the loader drops its caches before calling subscribers. Destructured values keep their old value.
+- **`loadRaw()`** returns the cached raw value without validation; **`reset()`** drops every cache.
 
-Возвращает Proxy<T> над секцией конфига, валидированной schema (только схемы с объектным выходом). Первый доступ к любому полю триггерит валидацию и кэширует результат. Proxy read-only: запись и удаление бросают `TypeError`; `.readonly()`-схемы (замороженный результат) поддерживают spread и `Object.keys`.
-
-```ts
-import z from 'zod'
-
-const schema = z
-  .object({
-    api: z.object({ baseUrl: z.url(), timeout: z.number().default(30_000) }),
-  })
-  .meta({ id: 'crm-api' })
-
-export const config = defineConfig(schema)
-
-config.api.baseUrl        // string
-Object.keys(config)       // ['api']
-{ ...config }             // shallow copy
-```
-
-Имя схемы в ошибке берётся из `.meta({ id })`, `.meta({ title })`, иначе из `.describe()`. `id` уникален в глобальном реестре zod: повторное выполнение модуля со схемой (HMR, `vi.resetModules`) бросает «ID already exists» — для модулей, которые могут перевыполняться, используй `title`:
+Validation errors name the schema and the source:
 
 ```
-Config validation failed for schema 'crm-api' (loaded from file /repo/senate-e2e.config.yaml):
+Config validation failed for schema 'db' (loaded from file /srv/app/app.config.yaml):
 ✖ Invalid input: expected string, received number
-  → at api.baseUrl
+  → at db.url
 ```
 
-Несколько consumer-ов могут описать **разные секции** одного конфига — каждый валидирует только свою, лениво.
+The schema name comes from `.meta({ id })`, `.meta({ title })` or `.describe()`. Zod registers `id` globally and throws when a module that declares it runs twice (HMR, `vi.resetModules`), so prefer `title` in modules that can re-execute.
 
-#### `loadRaw(): unknown`
+### Composition
 
-Сырой результат `source.loadSync()` без валидации, кэшируется.
+- **`firstNonEmpty(sources)`** returns the first value that is not `undefined` or `null`; `{}` counts as a value. Throws with every source's `describe()` when all are empty.
+- **`mergeAll(sources)`** deep-merges values left to right: objects merge recursively, arrays and scalars are replaced, empty sources are skipped. Returns `undefined` when all are empty, so it composes with `firstNonEmpty`.
+- **`createInMemorySource(value, origin?)`** holds a value for tests and dev; `set(next)` replaces it and notifies watchers.
+- **`parseOrThrow(schema, raw, origin)`** validates once with the same error format, for eager checks outside a loader.
 
-#### `reset(): void`
+## Node sources
 
-Сбрасывает raw-кэш и все per-schema кэши.
+- `createProcessEnvSource({ envVar, parser? })` parses a JSON env var; an unset or empty variable yields `undefined`.
+- `createFileSource({ path, parser })` reads and parses a file; a missing file yields `undefined`.
+- `createYamlEnvSource({ envVar, yamlFile, yamlPath? })` is `firstNonEmpty` over the env var and a YAML file, taken from `yamlPath` or found upward from `process.cwd()`.
+- `createYamlConfigLoader(options)` wraps `createYamlEnvSource` in a loader.
+- `yamlParser` and `jsonParser` plug into any source that takes a parser.
 
-#### `validateAll(): void`
+## Browser source
 
-Eager-валидация всех зарегистрированных схем; одна ошибка со всеми провалами. Ошибка самого источника (битый JSON/YAML) бросается один раз, до валидации схем.
-
-#### `assertOnlyKnownTopKeys(): void`
-
-Opt-in: throws, если в корне конфига есть ключи вне объединения top-level ключей зарегистрированных `z.object`-схем (обёртки `readonly` / `default` / `optional` / `catch` / `lazy` / `pipe` разворачиваются). Для SPA с одной схемой — `validateAll()` + `assertOnlyKnownTopKeys()` в entry. В multi-consumer режиме не вызывать.
-
-#### `onChange(cb): () => void`
-
-Подписка на `source.watch`: сначала сбрасываются все кэши, потом вызываются callbacks. Деструктурированные значения (`const { host } = config.db`) не обновятся.
-
-### `firstNonEmpty(sources)`
-
-Первый источник, вернувший не `undefined`/`null` (`{}` — non-empty). Все пусты → ошибка со списком `describe()`. Ошибки источников пробрасываются. `describe()` после загрузки — описание сработавшего источника.
-
-### `createInMemorySource(value, origin = 'in-memory')`
-
-Для тестов и dev: `set(next)` меняет значение и триггерит `watch`; `origin` попадает в сообщения об ошибках.
+`createJsonScriptSource({ elementId = '__CONFIG__' })` parses the JSON inside `<script type="application/json" id="__CONFIG__">`. A missing element or empty text yields `undefined`.
 
 ```ts
-const loader = createSyncConfigLoader(createInMemorySource({ db: { host: 'x' } }))
-```
+import { createSyncConfigLoader } from '@yoshintame/config-kit'
+import { createJsonScriptSource } from '@yoshintame/config-kit/browser'
 
-### `mergeAll(sources)`
-
-Deep merge источников слева направо: объекты сливаются рекурсивно, массивы и скаляры заменяются, `null` в overlay — литеральное значение, пустые источники (`undefined`/`null`) пропускаются. Все пусты → `undefined` (композируется с `firstNonEmpty`). Используется для `config.yaml` + gitignored `config.local.yaml`.
-
-### `parseOrThrow(schema, raw, origin)`
-
-Разовая валидация с тем же форматом ошибки, что у loader: для жадных проверок вне Proxy (vite.config, build env).
-
-### `jsonParser`, `Parser`, `parseWith`
-
-Парсер — параметр source-фабрики: `{ parse(input: string): unknown }`. `parseWith(parser, input, origin)` — парсинг с `Failed to parse <origin>: …` и исходной ошибкой в `cause`.
-
-## Node (`@senate/config-node`)
-
-- `createProcessEnvSource({ envVar, parser = jsonParser })` — пустая/отсутствующая переменная → `undefined`.
-- `createFileSource({ path, parser })` — отсутствующий файл → `undefined`.
-- `createYamlEnvSource({ envVar, yamlFile, yamlPath? })` — `firstNonEmpty([env, yaml])`; yaml читается из `yamlPath` или ищется `findUp(yamlFile)` от `process.cwd()`.
-- `createYamlConfigLoader(options)` — `createSyncConfigLoader(createYamlEnvSource(options))`.
-- `yamlParser`.
-
-## Browser (`@senate/config-browser`)
-
-- `createJsonScriptSource({ elementId = '__CONFIG__' })` — парсит JSON из `<script type="application/json" id="__CONFIG__">`; нет элемента, пустой текст или нет `document` → `undefined`; битый JSON → ошибка с `script#__CONFIG__`.
-
-SPA с одной схемой, fail-fast в entry:
-
-```ts
 const loader = createSyncConfigLoader(createJsonScriptSource())
 export const config = loader.defineConfig(publicConfigSchema)
+
 loader.validateAll()
 loader.assertOnlyKnownTopKeys()
 ```
 
-## Vite (`@senate/vite-plugin-config`)
+## Vite plugin
 
 ```ts
-import { senateConfig } from '@senate/vite-plugin-config'
+import { configKit } from '@yoshintame/config-kit/vite'
+import { defineConfig } from 'vite'
+
+import {
+  buildEnvSchema,
+  publicConfigSchema,
+  serverConfigSchema,
+} from './src/config/schema'
 
 export default defineConfig({
   plugins: [
-    senateConfig({
+    configKit({
       schema: publicConfigSchema,
       serverSchema: serverConfigSchema,
       buildEnvSchema,
       envDts: 'src/env.d.ts',
-      serverRestart: ['backend.proxyUrl', 'otel.*'],
+      serverRestart: ['devServer.*'],
     }),
   ],
 })
 ```
 
-Источник в dev: `APP_PUBLIC_CONFIG` / `APP_PRIVATE_CONFIG`, иначе секции `public:` / `private:` из `mergeAll([config.yaml, config.local.yaml, $APP_CONFIG_OVERLAY])`, читается один раз за загрузку. `config.yaml` — findUp от root (не найден → ожидается в root и подхватится при создании); `config.local.yaml` — рядом с ним, личные настройки (`localYamlFile: false` отключает, например в vitest); `APP_CONFIG_OVERLAY` — путь временного overlay-файла для скриптов (`overlayEnvVar`). Runtime-схемы валидируются на старте dev-сервера.
-
-```yaml
-public:   # → @senate/config
-  backend:
-    apiUrl: /api
-private:  # → @senate/config/private и loadDevConfig
-  devServer:
-    backendUrl: https://crm-dev.example.com
-env:      # только dev: build env под buildEnvSchema, process env важнее
-  VITE_MSW_ENABLED: false
-```
-
-`loadDevConfig({ serverSchema, ...options })` — тот же источник для `vite.config.ts` (proxy target и т.п.), возвращает провалидированный plain-объект — deep merge `private` поверх `public`. Ошибка серверной схемы указывает оба источника.
-
-Virtual modules (типы — `/// <reference types="@senate/vite-plugin-config/client" />`):
-
-- `@senate/config` — `source` с public-конфигом. Dev: in-memory source со значением из yaml; build: `createJsonScriptSource`, в `index.html` инжектится `<script type="application/json" id="__CONFIG__">${APP_PUBLIC_CONFIG}</script>` под envsubst; SSR-build: `createProcessEnvSource(APP_PUBLIC_CONFIG)`.
-- `@senate/config/private` — `source` с deep merge `private` поверх `public`, только SSR; импорт из клиентского кода — ошибка. Build: `mergeAll` двух env-var в runtime.
-
-Продовые модули импортируют `@senate/config-*`, резолвя их от пакета плагина — приложению прямые зависимости на `config-browser` / `config-node` не нужны. Плагин `enforce: 'pre'`: virtual id не перехватывается одноимённым пакетом из `node_modules`.
+The app owns its loader and schema; the plugin only supplies the source:
 
 ```ts
-import { createSyncConfigLoader } from '@senate/config-core'
-import { source } from '@senate/config'
+/// <reference types="@yoshintame/config-kit/vite/client" />
+import { createSyncConfigLoader } from '@yoshintame/config-kit'
+import { source } from 'virtual:config-kit'
 
 const loader = createSyncConfigLoader(source)
 export const publicConfig = loader.defineConfig(publicConfigSchema)
 ```
 
-Watch yaml в dev — реакция по изменённым путям:
+### Config file
 
-| Путь | Реакция |
-|---|---|
-| секция `env` или совпал с `serverRestart` | `server.restart()` |
-| совпал с `fullReload` | full page reload |
-| остальное | HMR: dev-модуль self-accept, сохраняет `source` в `import.meta.hot.data` и делает `source.set(raw)` → `loader.onChange` сбрасывает кэши и зовёт подписчиков, приложение перерисовывается само |
-| невалидный конфиг | error overlay, предыдущий конфиг остаётся; откат к валидному (даже без изменений) шлёт HMR-update и снимает overlay |
+```yaml
+public:
+  backend:
+    apiUrl: /api
+private:
+  devServer:
+    backendUrl: https://staging.example.com
+env:
+  VITE_MSW_ENABLED: false
+```
 
-Build env: `buildEnvSchema` валидирует env на старте dev/build — dev: yaml-секция `env` (скаляры приводятся к строкам, как в `.env`) под `loadEnv` (все префиксы), build: только `loadEnv`. Результат с coercion и defaults подставляется через `define` в `import.meta.env.*`. `envDts` генерирует `ImportMetaEnv`.
+In dev the plugin reads `config.yaml` (found upward from the Vite root), deep-merges the gitignored `config.local.yaml` next to it and the file named in `APP_CONFIG_OVERLAY`, then takes:
 
-## Сборка
+- `public` — the runtime config the browser sees. `APP_PUBLIC_CONFIG` (JSON) overrides it.
+- `private` — server-only values such as dev-server settings, merged over `public`. `APP_PRIVATE_CONFIG` overrides it.
+- `env` — build-time values for `import.meta.env`, dev only; real env vars and `.env` files win.
 
-`bun run build` — tsup собирает каждый пакет в `dist/` (ESM + `.d.ts`); потребители резолвят `dist`. Внутри репо `tsc` идёт по export-condition `source`, vitest — по `resolve.alias` на исходники (condition не доходит до node-окружения vitest). Потребитель через `bun link` видит изменения только после пересборки.
+`loadDevConfig({ serverSchema, ...options })` reads the same files from `vite.config.ts` and returns the validated server config, for proxy targets and similar settings.
 
-## Мутационное тестирование
+### Virtual modules
 
-`bun run test:mutation` — StrykerJS (vitest runner, per-test coverage, typescript checker). Результаты инкрементальные (`reports/stryker-incremental.json`), HTML-отчёт — `reports/mutation/index.html`. Выжившие мутанты — непроверенное поведение: дописать тест или упростить код. Оставшиеся выжившие эквивалентны (логгер, имя плагина, `?? []`, форматирование сгенерированного кода, guard'ы на невозможные значения).
+| Module | Dev | Build |
+| --- | --- | --- |
+| `virtual:config-kit` | In-memory source with the `public` section | Client: `createJsonScriptSource`. SSR: `APP_PUBLIC_CONFIG` |
+| `virtual:config-kit/private` | `private` merged over `public` | `APP_PUBLIC_CONFIG` merged with `APP_PRIVATE_CONFIG` at runtime |
 
-## Зависимости
+`virtual:config-kit/private` is SSR-only; importing it from client code fails the build.
 
-`zod` (peer); node-слой — `yaml`, `find-up`; vite-плагин — `vite` (peer).
+### Dev reactions
+
+| Change | Reaction |
+| --- | --- |
+| `env` section, or a path in `serverRestart` | Dev server restart |
+| A path in `fullReload` | Full page reload |
+| Anything else | HMR: the source updates in place and `loader.onChange` subscribers run |
+| Invalid config | Error overlay; the last valid config stays active |
+
+### Build-time env
+
+`buildEnvSchema` validates env at dev and build start: in dev the YAML `env` section under `loadEnv`, in build `loadEnv` only. Parsed values, with coercion and defaults, replace `import.meta.env.*` through `define`, so dead code behind build flags is tree-shaken. `envDts` writes a matching `ImportMetaEnv` declaration.
+
+### Runtime injection
+
+A production build leaves this in `index.html`:
+
+```html
+<script type="application/json" id="__CONFIG__">${APP_PUBLIC_CONFIG}</script>
+```
+
+Substitute it when the container starts. Escape `<` so the JSON cannot close the script element:
+
+```sh
+config=$(printf '%s' "$APP_PUBLIC_CONFIG" | jq -c . | sed 's/</\\u003c/g')
+APP_PUBLIC_CONFIG=$config envsubst '${APP_PUBLIC_CONFIG}' < index.template.html > index.html
+```
+
+Keep `index.html` out of service-worker precache, or a cached page keeps serving the old config.
+
+## License
+
+MIT
