@@ -61,7 +61,7 @@ async function startDev(options: ConfigKitOptions = {}) {
     configFile: false,
     resolve: sourceResolve,
     logLevel: 'silent',
-    server: { middlewareMode: true, ws: false },
+    server: { middlewareMode: true, ws: false, watch: null },
     plugins: [configKit({ schema: publicSchema, ...options })],
   })
   return server
