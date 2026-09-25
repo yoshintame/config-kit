@@ -97,6 +97,10 @@ Opt-in: throws, если в корне конфига есть ключи вне
 const loader = createSyncConfigLoader(createInMemorySource({ db: { host: 'x' } }))
 ```
 
+### `mergeAll(sources)`
+
+Deep merge источников слева направо: объекты сливаются рекурсивно, массивы и скаляры заменяются, `null` в overlay — литеральное значение, пустые источники (`undefined`/`null`) пропускаются. Все пусты → `undefined` (композируется с `firstNonEmpty`). Используется для `config.yaml` + gitignored `config.local.yaml`.
+
 ### `jsonParser`, `Parser`
 
 Парсер — параметр source-фабрики: `{ parse(input: string): unknown }`.
@@ -140,7 +144,20 @@ export default defineConfig({
 })
 ```
 
-Источник в dev: `APP_PUBLIC_CONFIG` / `APP_PRIVATE_CONFIG`, иначе секции `public:` / `private:` из `config.yaml` (findUp от root). Runtime-схемы валидируются на старте dev-сервера.
+Источник в dev: `APP_PUBLIC_CONFIG` / `APP_PRIVATE_CONFIG`, иначе секции `public:` / `private:` из `mergeAll([config.yaml, config.local.yaml])` (`config.yaml` — findUp от root, `config.local.yaml` — рядом с ним, `localYamlFile`). Runtime-схемы валидируются на старте dev-сервера.
+
+```yaml
+public:   # → @senate/config
+  backend:
+    apiUrl: /api
+private:  # → @senate/config/private и loadDevConfig
+  devServer:
+    backendUrl: https://crm-dev.example.com
+env:      # только dev: build env под buildEnvSchema, process env важнее
+  VITE_MSW_ENABLED: false
+```
+
+`loadDevConfig({ serverSchema, ...options })` — тот же источник для `vite.config.ts` (proxy target и т.п.), возвращает провалидированный `{ ...public, ...private }`.
 
 Virtual modules (типы — `/// <reference types="@senate/vite-plugin-config/client" />`):
 
@@ -159,12 +176,12 @@ Watch yaml в dev — реакция по изменённым путям:
 
 | Путь | Реакция |
 |---|---|
-| совпал с `serverRestart` | `server.restart()` |
+| секция `env` или совпал с `serverRestart` | `server.restart()` |
 | совпал с `fullReload` | full page reload |
 | остальное | HMR virtual modules |
 | невалидный конфиг | error overlay, предыдущий конфиг остаётся |
 
-Build env: `buildEnvSchema` валидирует env (`loadEnv`, все префиксы) на старте dev/build; результат с coercion и defaults подставляется через `define` в `import.meta.env.*`. `envDts` генерирует `ImportMetaEnv`.
+Build env: `buildEnvSchema` валидирует env на старте dev/build — dev: yaml-секция `env` (скаляры приводятся к строкам, как в `.env`) под `loadEnv` (все префиксы), build: только `loadEnv`. Результат с coercion и defaults подставляется через `define` в `import.meta.env.*`. `envDts` генерирует `ImportMetaEnv`.
 
 ## Зависимости
 

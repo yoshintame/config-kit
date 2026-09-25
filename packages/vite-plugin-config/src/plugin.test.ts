@@ -15,6 +15,7 @@ import { build, createServer, type ViteDevServer } from 'vite'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import z from 'zod'
 
+import { loadDevConfig } from './dev-reader'
 import { type SenateConfigOptions, senateConfig } from './plugin'
 
 type SourceModule = {
@@ -29,10 +30,10 @@ let root: string
 let yamlPath: string
 let server: ViteDevServer | undefined
 
-function writeYaml(apiUrl: unknown, extra = '') {
+function writeYaml(apiUrl: unknown, extra = '', tail = '') {
   writeFileSync(
     yamlPath,
-    `public:\n  backend:\n    apiUrl: ${apiUrl}\n${extra}private:\n  db:\n    url: postgres://local\n`,
+    `public:\n  backend:\n    apiUrl: ${apiUrl}\n${extra}private:\n  db:\n    url: postgres://local\n${tail}`,
   )
 }
 
@@ -52,9 +53,14 @@ async function loadSource(dev: ViteDevServer, id: string) {
   return mod.source.loadSync()
 }
 
-async function changeYaml(dev: ViteDevServer, apply: () => void) {
+async function changeYaml(
+  dev: ViteDevServer,
+  apply: () => void,
+  file = yamlPath,
+  event = 'change',
+) {
   apply()
-  dev.watcher.emit('change', yamlPath)
+  dev.watcher.emit(event, file)
   await vi.waitFor(() => {})
   await new Promise((resolve) => setTimeout(resolve, 20))
 }
@@ -114,7 +120,7 @@ describe('dev', () => {
   test('fails to start on invalid runtime config', async () => {
     writeYaml('not-a-url')
     await expect(startDev()).rejects.toThrow(
-      /Config validation failed for schema 'public' \(loaded from file .*config\.yaml \(public\)\)/,
+      /Config validation failed for schema 'public' \(loaded from merge of \[file .*config\.yaml, file .*config\.local\.yaml\] \(public\)\)/,
     )
   })
 
@@ -126,6 +132,118 @@ describe('dev', () => {
     const dev = await startDev()
     await expect(dev.transformRequest('/src/leak.ts')).rejects.toThrow(
       /server-only/,
+    )
+  })
+})
+
+describe('local yaml', () => {
+  test('overrides committed yaml', async () => {
+    writeFileSync(
+      join(root, 'config.local.yaml'),
+      'public:\n  backend:\n    apiUrl: https://api.mine\n',
+    )
+    const dev = await startDev()
+    expect(await loadSource(dev, '@senate/config/private')).toEqual({
+      backend: { apiUrl: 'https://api.mine' },
+      db: { url: 'postgres://local' },
+    })
+  })
+
+  test('creating it at runtime hot-reloads config', async () => {
+    const dev = await startDev()
+    await loadSource(dev, '@senate/config')
+    const localPath = join(root, 'config.local.yaml')
+
+    await changeYaml(
+      dev,
+      () =>
+        writeFileSync(
+          localPath,
+          'public:\n  backend:\n    apiUrl: https://api.mine\n',
+        ),
+      localPath,
+      'add',
+    )
+
+    expect(await loadSource(dev, '@senate/config')).toEqual({
+      backend: { apiUrl: 'https://api.mine' },
+    })
+  })
+})
+
+describe('yaml env section', () => {
+  const buildEnvSchema = z.object({
+    VITE_FLAG: z.stringbool().default(false),
+    VITE_NAME: z.string().optional(),
+  })
+
+  test('feeds build env in dev', async () => {
+    writeYaml(
+      'https://api.local',
+      '',
+      'env:\n  VITE_FLAG: true\n  VITE_NAME: yaml\n',
+    )
+    const dev = await startDev({ buildEnvSchema })
+    expect(dev.config.define).toMatchObject({
+      'import.meta.env.VITE_FLAG': 'true',
+      'import.meta.env.VITE_NAME': '"yaml"',
+    })
+  })
+
+  test('process env wins over yaml env section', async () => {
+    writeYaml('https://api.local', '', 'env:\n  VITE_NAME: yaml\n')
+    vi.stubEnv('VITE_NAME', 'process')
+    const dev = await startDev({ buildEnvSchema })
+    expect(dev.config.define).toMatchObject({
+      'import.meta.env.VITE_NAME': '"process"',
+    })
+    vi.unstubAllEnvs()
+  })
+
+  test('change restarts the server', async () => {
+    writeYaml('https://api.local', '', 'env:\n  VITE_FLAG: false\n')
+    const dev = await startDev({ buildEnvSchema })
+    const restart = vi.spyOn(dev, 'restart').mockResolvedValue()
+
+    await changeYaml(dev, () =>
+      writeYaml('https://api.local', '', 'env:\n  VITE_FLAG: true\n'),
+    )
+
+    expect(restart).toHaveBeenCalledOnce()
+  })
+
+  test('is ignored in build', async () => {
+    writeYaml('https://api.local', '', 'env:\n  VITE_FLAG: true\n')
+    await build({
+      root,
+      configFile: false,
+      logLevel: 'silent',
+      plugins: [senateConfig({ schema: publicSchema, buildEnvSchema })],
+    })
+    const assets = join(root, 'dist', 'assets')
+    const js = readdirSync(assets)
+      .map((file) => readFileSync(join(assets, file), 'utf-8'))
+      .join('\n')
+    expect(js).toMatch(/console\.log\(\w+\.loadSync\(\),(false|!1)\)/)
+  })
+})
+
+describe('loadDevConfig', () => {
+  test('returns validated server config', () => {
+    const serverSchema = z.object({
+      backend: z.object({ apiUrl: z.url() }),
+      db: z.object({ url: z.string().transform((url) => url.toUpperCase()) }),
+    })
+    expect({ ...loadDevConfig({ serverSchema, root }) }).toEqual({
+      backend: { apiUrl: 'https://api.local' },
+      db: { url: 'POSTGRES://LOCAL' },
+    })
+  })
+
+  test('throws on invalid config', () => {
+    const serverSchema = z.object({ db: z.object({ url: z.number() }) })
+    expect(() => loadDevConfig({ serverSchema, root })).toThrow(
+      /Config validation failed/,
     )
   })
 })
@@ -226,8 +344,8 @@ describe('build', () => {
 
   test('injects placeholder script and reads config from window', async () => {
     const { html, js } = await runBuild()
-    expect(html).toContain(
-      `<script>window.__CONFIG__ = \${APP_PUBLIC_CONFIG}</script>`,
+    expect(html).toMatch(
+      /<script>window\.__CONFIG__ = \$\{APP_PUBLIC_CONFIG\}<\/script>/,
     )
     expect(html.indexOf('__CONFIG__')).toBeLessThan(
       html.indexOf('type="module"'),
