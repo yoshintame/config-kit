@@ -1,0 +1,24 @@
+{
+  "name": "@senate/vite-plugin-config",
+  "version": "0.1.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": {
+      "types": "./client.d.ts"
+    }
+  },
+  "dependencies": {
+    "@senate/config-core": "workspace:*",
+    "@senate/config-node": "workspace:*",
+    "find-up": "^7.0.0"
+  },
+  "devDependencies": {
+    "vite": "^6.3.6"
+  },
+  "peerDependencies": {
+    "vite": "^6.0.0 || ^7.0.0",
+    "zod": "^4.0.0"
+  }
+}

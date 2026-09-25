@@ -5,6 +5,7 @@ Generic ленивый загрузчик конфига с zod-валидаци
 - `@senate/config-core` — core: loader, контракт источника, `firstNonEmpty`, in-memory source. Ноль импортов из `node:*`, browser-safe.
 - `@senate/config-node` — source-адаптеры: env, файл, yaml+env с findUp. Под `browser` condition — stub с ошибкой.
 - `@senate/config-browser` — source-адаптеры для браузера: `window.__CONFIG__`.
+- `@senate/vite-plugin-config` — Vite-интеграция: virtual modules, HMR конфига, build env через `define`, `env.d.ts`.
 
 Пример wrapper-а в корне проекта (`config.ts`):
 
@@ -121,6 +122,50 @@ loader.validateAll()
 loader.assertOnlyKnownTopKeys()
 ```
 
+## Vite (`@senate/vite-plugin-config`)
+
+```ts
+import { senateConfig } from '@senate/vite-plugin-config'
+
+export default defineConfig({
+  plugins: [
+    senateConfig({
+      schema: publicConfigSchema,
+      serverSchema: serverConfigSchema,
+      buildEnvSchema,
+      envDts: 'src/env.d.ts',
+      serverRestart: ['backend.proxyUrl', 'otel.*'],
+    }),
+  ],
+})
+```
+
+Источник в dev: `APP_PUBLIC_CONFIG` / `APP_PRIVATE_CONFIG`, иначе секции `public:` / `private:` из `config.yaml` (findUp от root). Runtime-схемы валидируются на старте dev-сервера.
+
+Virtual modules (типы — `/// <reference types="@senate/vite-plugin-config/client" />`):
+
+- `@senate/config` — `source` с public-конфигом. Dev: значение из yaml; build: `window.__CONFIG__`, в `index.html` инжектится `<script>window.__CONFIG__ = ${APP_PUBLIC_CONFIG}</script>` под envsubst.
+- `@senate/config/private` — `source` с `{ ...public, ...private }`, только SSR; импорт из клиентского кода — ошибка. Build: читает оба env-var в runtime.
+
+```ts
+import { createSyncConfigLoader } from '@senate/config-core'
+import { source } from '@senate/config'
+
+const loader = createSyncConfigLoader(source)
+export const publicConfig = loader.defineConfig(publicConfigSchema)
+```
+
+Watch yaml в dev — реакция по изменённым путям:
+
+| Путь | Реакция |
+|---|---|
+| совпал с `serverRestart` | `server.restart()` |
+| совпал с `fullReload` | full page reload |
+| остальное | HMR virtual modules |
+| невалидный конфиг | error overlay, предыдущий конфиг остаётся |
+
+Build env: `buildEnvSchema` валидирует env (`loadEnv`, все префиксы) на старте dev/build; результат с coercion и defaults подставляется через `define` в `import.meta.env.*`. `envDts` генерирует `ImportMetaEnv`.
+
 ## Зависимости
 
-`zod` (peer); node-слой — `yaml`, `find-up`.
+`zod` (peer); node-слой — `yaml`, `find-up`; vite-плагин — `vite` (peer).
