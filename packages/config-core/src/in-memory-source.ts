@@ -1,16 +1,19 @@
 import type { SyncConfigSource } from './source'
 
-export type InMemorySource = SyncConfigSource & {
+export interface InMemorySource extends SyncConfigSource {
   set(value: unknown): void
 }
 
-export function createInMemorySource(initial: unknown): InMemorySource {
+export function createInMemorySource(
+  initial: unknown,
+  origin = 'in-memory',
+): InMemorySource {
   let value = initial
   const listeners = new Set<() => void>()
 
   return {
     loadSync: () => value,
-    describe: () => 'in-memory',
+    describe: () => origin,
     watch(onChange) {
       listeners.add(onChange)
       return () => listeners.delete(onChange)

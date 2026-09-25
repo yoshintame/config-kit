@@ -1,42 +1,34 @@
-import type { SyncConfigSource } from './source'
+import { isNil, isPlainObject } from 'es-toolkit'
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+import type { SyncConfigSource } from './source'
+import { watchAll } from './watch-all'
+
+export function mergeAll(sources: SyncConfigSource[]): SyncConfigSource {
+  return {
+    loadSync: () =>
+      sources
+        .map((source) => source.loadSync())
+        .filter((value) => !isNil(value))
+        .reduce<unknown>(deepMerge, undefined),
+    describe: () =>
+      `merge of [${sources.map((source) => source.describe()).join(', ')}]`,
+    ...watchAll(sources),
+  }
 }
 
 export function deepMerge(base: unknown, overlay: unknown): unknown {
   if (overlay === undefined) return base
-  if (!isPlainObject(base) || !isPlainObject(overlay)) return overlay
-  const result: Record<string, unknown> = { ...base }
-  for (const [key, value] of Object.entries(overlay)) {
-    result[key] = deepMerge(base[key], value)
-  }
-  return result
+  return isPlainObject(base) && isPlainObject(overlay)
+    ? mergeObjects(base, overlay)
+    : overlay
 }
 
-export function mergeAll(sources: SyncConfigSource[]): SyncConfigSource {
-  const watchable = sources.filter((source) => source.watch)
-
-  return {
-    loadSync() {
-      let merged: unknown
-      for (const source of sources) {
-        const value = source.loadSync()
-        if (value !== undefined && value !== null) {
-          merged = deepMerge(merged, value)
-        }
-      }
-      return merged
-    },
-    describe: () =>
-      `merge of [${sources.map((source) => source.describe()).join(', ')}]`,
-    ...(watchable.length > 0 && {
-      watch(onChange: () => void) {
-        const unwatchers = watchable.map((source) => source.watch!(onChange))
-        return () => {
-          for (const unwatch of unwatchers) unwatch()
-        }
-      },
-    }),
-  }
+function mergeObjects(
+  base: Record<string, unknown>,
+  overlay: Record<string, unknown>,
+): Record<string, unknown> {
+  const keys = new Set([...Object.keys(base), ...Object.keys(overlay)])
+  return Object.fromEntries(
+    [...keys].map((key) => [key, deepMerge(base[key], overlay[key])]),
+  )
 }

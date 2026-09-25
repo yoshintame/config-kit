@@ -18,5 +18,8 @@
   },
   "peerDependencies": {
     "zod": "^4.0.0"
+  },
+  "dependencies": {
+    "es-toolkit": "^1.52.0"
   }
 }

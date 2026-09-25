@@ -105,6 +105,31 @@ describe('createSyncConfigLoader', () => {
     expect(parse).toHaveBeenCalledOnce()
   })
 
+  test('proxy exposes frozen readonly results', () => {
+    const loader = createSyncConfigLoader(createInMemorySource({ a: 1, b: 2 }))
+    const config = loader.defineConfig(
+      z.object({ a: z.number(), b: z.number() }).readonly(),
+    )
+    expect({ ...config }).toEqual({ a: 1, b: 2 })
+    expect(Object.entries(config)).toEqual([
+      ['a', 1],
+      ['b', 2],
+    ])
+  })
+
+  test('proxy rejects writes', () => {
+    const loader = createSyncConfigLoader(createInMemorySource({ a: 1 }))
+    const config = loader.defineConfig(z.object({ a: z.number() }))
+    expect(() => {
+      ;(config as { a: number }).a = 2
+    }).toThrow(TypeError)
+    expect(() => delete (config as { a?: number }).a).toThrow(TypeError)
+    expect(() => Object.defineProperty(config, 'b', { value: 1 })).toThrow(
+      TypeError,
+    )
+    expect(config.a).toBe(1)
+  })
+
   test('loadRaw returns unvalidated value', () => {
     const raw = { anything: [1, 2] }
     const loader = createSyncConfigLoader(createInMemorySource(raw))
@@ -119,6 +144,18 @@ describe('createSyncConfigLoader', () => {
       loader.defineConfig(z.object({ a: z.number() }))
       loader.defineConfig(z.object({ b: z.string() }))
       expect(() => loader.validateAll()).not.toThrow()
+    })
+
+    test('reports a failing source once', () => {
+      const loader = createSyncConfigLoader({
+        loadSync: () => {
+          throw new Error('boom')
+        },
+        describe: () => 'broken',
+      })
+      loader.defineConfig(z.object({ a: z.number() }))
+      loader.defineConfig(z.object({ b: z.number() }))
+      expect(() => loader.validateAll()).toThrow(/^boom$/)
     })
 
     test('reports every failing schema', () => {
@@ -140,6 +177,20 @@ describe('createSyncConfigLoader', () => {
       loader.defineConfig(
         z.object({ b: z.number() }).transform(({ b }) => ({ b: b * 2 })),
       )
+      expect(() => loader.assertOnlyKnownTopKeys()).not.toThrow()
+    })
+
+    test.each([
+      ['readonly', z.object({ b: z.number() }).readonly()],
+      ['default', z.object({ b: z.number() }).default({ b: 0 })],
+      ['optional', z.object({ b: z.number() }).optional()],
+      ['lazy', z.lazy(() => z.object({ b: z.number() }))],
+    ])('unwraps %s object schemas', (_, schema) => {
+      const loader = createSyncConfigLoader(
+        createInMemorySource({ a: 1, b: 2 }),
+      )
+      loader.defineConfig(z.object({ a: z.number() }))
+      loader.defineConfig(schema as z.ZodType<Record<string, unknown>>)
       expect(() => loader.assertOnlyKnownTopKeys()).not.toThrow()
     })
 
