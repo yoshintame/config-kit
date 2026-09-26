@@ -5,7 +5,7 @@ Lazy, [Zod](https://zod.dev)-validated configuration with pluggable sources, plu
 - **Lazy by default.** Each schema validates its own section on first access; unrelated sections never block startup.
 - **Many consumers, one file.** Modules declare their own schemas over a shared config file.
 - **Pluggable sources.** Env vars, YAML/JSON files, a JSON `<script>` element, in-memory values, composed with `firstNonEmpty` and `mergeAll`.
-- **Runtime config for SPAs.** The Vite plugin serves config from YAML in dev and leaves an `envsubst` placeholder in `index.html` for production.
+- **Runtime config for SPAs.** The Vite plugin serves config from YAML in dev, leaves an `envsubst` placeholder in `index.html` for production, and emits the container validator and nginx entrypoint hook.
 
 ## Install
 
@@ -13,15 +13,14 @@ Lazy, [Zod](https://zod.dev)-validated configuration with pluggable sources, plu
 bun add @yoshintame/config-kit zod
 ```
 
-`zod@^4` is a peer dependency. The Vite plugin also needs `vite@^6 || ^7`.
+`zod@^4` is a peer dependency. The Vite plugin also needs `vite@^6.1 || ^7`.
 
 | Entry point | Contents | Runtime |
 | --- | --- | --- |
 | `@yoshintame/config-kit` | Loader, source contract, composition, in-memory source | Any |
 | `@yoshintame/config-kit/node` | Env var, file and YAML sources | Node, Bun |
-| `@yoshintame/config-kit/browser` | JSON `<script>` element source | Browser |
+| `@yoshintame/config-kit/browser` | JSON `<script>` element source, `bootstrap` | Browser |
 | `@yoshintame/config-kit/vite` | Vite plugin, `loadDevConfig` | Node, Bun |
-| `@yoshintame/config-kit/vite/client` | Types for the virtual modules | Types only |
 
 The core entry imports nothing from `node:*`. Under the `browser` condition, `/node` resolves to a stub whose functions throw.
 
@@ -116,41 +115,51 @@ loader.validateAll()
 loader.assertOnlyKnownTopKeys()
 ```
 
+With the Vite plugin, use the loader from `virtual:config-kit` and `bootstrap` instead.
+
 ## Vite plugin
 
 ```ts
 import { configKit } from '@yoshintame/config-kit/vite'
 import { defineConfig } from 'vite'
 
-import {
-  buildEnvSchema,
-  publicConfigSchema,
-  serverConfigSchema,
-} from './src/config/schema'
-
 export default defineConfig({
   plugins: [
     configKit({
-      schema: publicConfigSchema,
-      serverSchema: serverConfigSchema,
-      buildEnvSchema,
-      envDts: 'src/env.d.ts',
+      schemaModule: './src/config/schema.ts',
+      docker: true,
       serverRestart: ['devServer.*'],
     }),
   ],
 })
 ```
 
-The app owns its loader and schema; the plugin only supplies the source:
+### Schema module
+
+The plugin imports `schemaModule` itself, validates dev config against it and bundles it into the generated modules and the container validator. It reads three exports:
 
 ```ts
-/// <reference types="@yoshintame/config-kit/vite/client" />
-import { createSyncConfigLoader } from '@yoshintame/config-kit'
-import { source } from 'virtual:config-kit'
+import { z } from 'zod'
 
-const loader = createSyncConfigLoader(source)
-export const publicConfig = loader.defineConfig(publicConfigSchema)
+export const publicSchema = z.object({
+  backend: z.object({ apiUrl: z.string() }),
+})
+
+export const serverSchema = publicSchema.extend({
+  devServer: z.object({ backendUrl: z.url() }),
+})
+
+export const buildSchema = z.object({
+  msw: z.boolean().default(false),
+  devtools: z.boolean().default(false),
+})
 ```
+
+- `publicSchema`, required: the runtime config the browser sees.
+- `serverSchema`, optional: `public` plus `private`, for dev-server settings and SSR. Defaults to `publicSchema`.
+- `buildSchema`, optional: build-time values inlined into the bundle.
+
+Editing the schema module restarts the dev server.
 
 ### Config file
 
@@ -161,41 +170,64 @@ public:
 private:
   devServer:
     backendUrl: https://staging.example.com
-env:
-  VITE_MSW_ENABLED: false
+build:
+  msw: false
+  devtools: true
 ```
 
 In dev the plugin reads `config.yaml` (found upward from the Vite root), deep-merges the gitignored `config.local.yaml` next to it and the file named in `APP_CONFIG_OVERLAY`, then takes:
 
-- `public`: the runtime config the browser sees. `APP_PUBLIC_CONFIG` (JSON) overrides it.
-- `private`: server-only values such as dev-server settings, merged over `public`. `APP_PRIVATE_CONFIG` overrides it.
-- `env`: build-time values for `import.meta.env`, dev only; real env vars and `.env` files win.
+- `public`: `APP_PUBLIC_CONFIG` (JSON) overrides it.
+- `private`: merged over `public` for the server view. `APP_PRIVATE_CONFIG` overrides it.
+- `build`: `APP_BUILD_CONFIG` overrides it. Dev only: `vite build` ignores the section and takes `APP_BUILD_CONFIG` over the schema defaults, so a committed dev file never sets production flags.
 
-`loadDevConfig({ serverSchema, ...options })` reads the same files from `vite.config.ts` and returns the validated server config, for proxy targets and similar settings.
+Any other top-level section is an error.
+
+`loadDevConfig({ schemaModule })` reads the same files from `vite.config.ts` and resolves to the validated server config, for proxy targets and similar settings.
 
 ### Virtual modules
 
-| Module | Dev | Build |
-| --- | --- | --- |
-| `virtual:config-kit` | In-memory source with the `public` section | Client: `createJsonScriptSource`. SSR: `APP_PUBLIC_CONFIG` |
-| `virtual:config-kit/private` | `private` merged over `public` | `APP_PUBLIC_CONFIG` merged with `APP_PRIVATE_CONFIG` at runtime |
+```ts
+import { loader, publicConfig, source } from 'virtual:config-kit'
+import { buildConfig } from 'virtual:config-kit/build'
 
-`virtual:config-kit/private` is SSR-only; importing it from client code fails the build.
+if (buildConfig.msw) await import('./mocks')
+fetch(`${publicConfig.backend.apiUrl}/users`)
+```
+
+| Module | Exports | Dev | Build |
+| --- | --- | --- | --- |
+| `virtual:config-kit` | `source`, `loader`, `publicConfig` | `public` section | Client: `createJsonScriptSource`. SSR: `APP_PUBLIC_CONFIG` |
+| `virtual:config-kit/private` | `source`, `loader`, `serverConfig` | `private` merged over `public` | `APP_PUBLIC_CONFIG` merged with `APP_PRIVATE_CONFIG` at runtime |
+| `virtual:config-kit/build` | `buildConfig` | `build` section | `APP_BUILD_CONFIG` over schema defaults |
+
+`virtual:config-kit/private` is SSR-only; importing it from client code fails the build. `buildConfig` is an object literal in the bundle, so branches behind `false` flags and the dynamic imports inside them are dropped. Read its fields directly; passing the whole object around keeps every branch.
+
+The plugin writes typings for these modules to `dts` (default `src/config-kit.d.ts`, `false` to disable); keep the file inside your `tsconfig` includes.
 
 ### Dev reactions
 
 | Change | Reaction |
 | --- | --- |
-| `env` section, or a path in `serverRestart` | Dev server restart |
-| A path in `fullReload` | Full page reload |
-| Anything else | HMR: the source updates in place and `loader.onChange` subscribers run |
+| Schema module, `build` section, or a path in `serverRestart` | Dev server restart |
+| `public` or `private` | Full page reload |
+| Same, with `hmr: true` | The source updates in place and `loader.onChange` subscribers run; paths in `fullReload` still reload the page |
 | Invalid config | Error overlay; the last valid config stays active |
 
-### Build-time env
+### Fail-fast entry
 
-`buildEnvSchema` validates env at dev and build start: in dev the YAML `env` section under `loadEnv`, in build `loadEnv` only. Parsed values, with coercion and defaults, replace `import.meta.env.*` through `define`, so dead code behind build flags is tree-shaken. `envDts` writes a matching `ImportMetaEnv` declaration.
+Modules often read config at import time, so validate before the app graph loads:
 
-### Runtime injection
+```ts
+import { bootstrap } from '@yoshintame/config-kit/browser'
+import { loader } from 'virtual:config-kit'
+
+bootstrap(loader, () => import('./app'))
+```
+
+`bootstrap` runs `validateAll()` and `assertOnlyKnownTopKeys()`, then imports the app. On failure it logs the error and shows its text in `#root` (or `<body>`). Pass `{ renderError }` for a custom screen.
+
+### Docker
 
 A production build leaves this in `index.html`:
 
@@ -203,14 +235,22 @@ A production build leaves this in `index.html`:
 <script type="application/json" id="__CONFIG__">${APP_PUBLIC_CONFIG}</script>
 ```
 
-Substitute it when the container starts. Escape `<` so the JSON cannot close the script element:
+With `docker: true`, `vite build` also writes `dist-config/`:
 
-```sh
-config=$(printf '%s' "$APP_PUBLIC_CONFIG" | jq -c . | sed 's/</\\u003c/g')
-APP_PUBLIC_CONFIG=$config envsubst '${APP_PUBLIC_CONFIG}' < index.template.html > index.html
+- `validate.mjs`: a self-contained validator (schema, Zod and core bundled) that checks `APP_PUBLIC_CONFIG` like `bootstrap` does and exits with 1 and the error. Runs with `node` or `bun`, no `node_modules`.
+- `docker-entrypoint.d/40-config-kit-inject.sh`: a hook for the official nginx image entrypoint. On every start it requires a non-empty `APP_PUBLIC_CONFIG`, escapes `<` so the JSON cannot close the script element, and renders `index.html` with `envsubst` from a template kept outside the docroot.
+
+```dockerfile
+FROM node:22-alpine AS config-validator
+COPY --from=build /app/dist-config/validate.mjs /validate.mjs
+ENTRYPOINT ["node", "/validate.mjs"]
+
+FROM nginx:1.27-alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY --from=build /app/dist-config/docker-entrypoint.d/ /docker-entrypoint.d/
 ```
 
-Keep `index.html` out of service-worker precache, or a cached page keeps serving the old config.
+Run the validator as an init container before nginx. Keep `index.html` out of service-worker precache, or a cached page keeps serving the old config.
 
 ## License
 

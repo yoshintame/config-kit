@@ -1,8 +1,9 @@
 import path from 'node:path'
 
-import { isNil, isPlainObject, mapValues, omitBy } from 'es-toolkit'
+import { isNil, isPlainObject } from 'es-toolkit'
 import { findUpSync } from 'find-up'
-import type { ZodType, z } from 'zod'
+import type { AliasOptions } from 'vite'
+import type { ZodType } from 'zod'
 
 import {
   deepMerge,
@@ -11,13 +12,18 @@ import {
   type SyncConfigSource,
 } from '../core'
 import { createFileSource, createProcessEnvSource, yamlParser } from '../node'
-import { OVERLAY_ENV_VAR, PRIVATE_ENV_VAR, PUBLIC_ENV_VAR } from './constants'
+import {
+  BUILD_ENV_VAR,
+  OVERLAY_ENV_VAR,
+  PRIVATE_ENV_VAR,
+  PUBLIC_ENV_VAR,
+} from './constants'
+import { importSchemaModule, type Schemas } from './schema-module'
 
 export interface DevConfigOptions {
-  schema?: ZodType
-  serverSchema?: ZodType
   publicEnvVar?: string
   privateEnvVar?: string
+  buildEnvVar?: string
   yamlFile?: string
   yamlPath?: string
   localYamlFile?: string | false
@@ -33,7 +39,8 @@ export interface DevState {
   public: LoadedConfig
   server: LoadedConfig
   serverConfig: unknown
-  env: Record<string, string>
+  build: LoadedConfig
+  buildConfig: unknown
 }
 
 export interface DevReader {
@@ -41,24 +48,37 @@ export interface DevReader {
   watchedFiles: string[]
 }
 
-export function loadDevConfig<S extends ZodType>({
+const SECTIONS = ['public', 'private', 'build']
+
+export async function loadDevConfig<T = unknown>({
+  schemaModule,
   root = process.cwd(),
+  alias,
   ...options
-}: DevConfigOptions & { serverSchema: S; root?: string }): z.output<S> {
-  return createDevReader(options, root).load().serverConfig as z.output<S>
+}: DevConfigOptions & {
+  schemaModule: string
+  root?: string
+  alias?: AliasOptions
+}): Promise<T> {
+  const { schemas } = await importSchemaModule({
+    file: path.resolve(root, schemaModule),
+    root,
+    alias,
+  })
+  return createDevReader(options, schemas, root).load().serverConfig as T
 }
 
 export function createDevReader(
   {
-    schema,
-    serverSchema,
     publicEnvVar = PUBLIC_ENV_VAR,
     privateEnvVar = PRIVATE_ENV_VAR,
+    buildEnvVar = BUILD_ENV_VAR,
     yamlFile = 'config.yaml',
     yamlPath,
     localYamlFile = 'config.local.yaml',
     overlayEnvVar = OVERLAY_ENV_VAR,
   }: DevConfigOptions,
+  { publicSchema, serverSchema, buildSchema }: Schemas,
   root: string,
 ): DevReader {
   const configPath = yamlPath
@@ -78,10 +98,19 @@ export function createDevReader(
   )
   const publicEnv = createProcessEnvSource({ envVar: publicEnvVar })
   const privateEnv = createProcessEnvSource({ envVar: privateEnvVar })
+  const buildEnv = createProcessEnvSource({ envVar: buildEnvVar })
 
   function load(): DevState {
     const document = yaml.loadSync()
     const sections = isPlainObject(document) ? document : {}
+    const unknown = Object.keys(sections).filter(
+      (key) => !SECTIONS.includes(key),
+    )
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unknown sections in ${yaml.describe()}: ${unknown.join(', ')} (expected ${SECTIONS.join(', ')})`,
+      )
+    }
     const inYaml = (key: string): LoadedConfig => ({
       raw: sections[key],
       origin: `${yaml.describe()} (${key})`,
@@ -93,7 +122,7 @@ export function createDevReader(
         `Config not found in any source: ${publicEnv.describe()}, ${publicConfig.origin}`,
       )
     }
-    if (schema) parseOrThrow(schema, publicConfig.raw, publicConfig.origin)
+    parseOrThrow(publicSchema, publicConfig.raw, publicConfig.origin)
 
     const privateConfig = fromEnvOr(privateEnv, inYaml('private'))
     const server: LoadedConfig =
@@ -104,17 +133,46 @@ export function createDevReader(
             origin: `${publicConfig.origin} + ${privateConfig.origin}`,
           }
 
+    const build = fromEnvOr(buildEnv, inYaml('build'))
+
     return {
       public: publicConfig,
       server,
-      serverConfig: serverSchema
-        ? parseOrThrow(serverSchema, server.raw, server.origin)
-        : server.raw,
-      env: stringifyEnv(sections.env),
+      serverConfig: parseOrThrow(
+        serverSchema ?? publicSchema,
+        server.raw,
+        server.origin,
+      ),
+      build,
+      buildConfig: parseBuildConfig(buildSchema, build),
     }
   }
 
   return { load, watchedFiles }
+}
+
+export function loadBuildConfig(
+  schema: ZodType | undefined,
+  envVar = BUILD_ENV_VAR,
+): unknown {
+  const env = createProcessEnvSource({ envVar })
+  return parseBuildConfig(schema, {
+    raw: env.loadSync(),
+    origin: env.describe(),
+  })
+}
+
+function parseBuildConfig(
+  schema: ZodType | undefined,
+  { raw, origin }: LoadedConfig,
+): unknown {
+  if (schema) return parseOrThrow(schema, raw ?? {}, origin)
+  if (raw !== undefined) {
+    throw new Error(
+      `Build config found in ${origin}, but the schema module exports no 'buildSchema'`,
+    )
+  }
+  return undefined
 }
 
 function fromEnvOr(
@@ -123,12 +181,4 @@ function fromEnvOr(
 ): LoadedConfig {
   const raw = env.loadSync()
   return raw === undefined ? fallback : { raw, origin: env.describe() }
-}
-
-function stringifyEnv(value: unknown): Record<string, string> {
-  return isPlainObject(value)
-    ? mapValues(omitBy(value, isNil), (entry) =>
-        typeof entry === 'object' ? JSON.stringify(entry) : String(entry),
-      )
-    : {}
 }

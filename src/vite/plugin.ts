@@ -1,16 +1,17 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { isEqual } from 'es-toolkit'
 import { match } from 'ts-pattern'
-import { loadEnv, type ModuleNode, type Plugin, type ViteDevServer } from 'vite'
-import type { ZodType } from 'zod'
+import type { ModuleNode, Plugin, ResolvedConfig, ViteDevServer } from 'vite'
 
 import { DEFAULT_CONFIG_ELEMENT_ID } from '../browser'
-import { parseOrThrow } from '../core'
 import { changedPaths, matchesAny } from './changed-paths'
+import { renderConfigDts } from './config-dts'
 import {
+  BUILD_ENV_VAR,
+  BUILD_MODULE_ID,
   PRIVATE_ENV_VAR,
   PRIVATE_MODULE_ID,
   PUBLIC_ENV_VAR,
@@ -21,40 +22,56 @@ import {
   type DevConfigOptions,
   type DevReader,
   type DevState,
+  loadBuildConfig,
 } from './dev-reader'
-import { renderEnvDts } from './env-dts'
-import { buildModule, devModule, type ModuleKind } from './virtual-modules'
+import { writeDockerArtifacts } from './docker'
+import { importSchemaModule, type SchemaModule } from './schema-module'
+import {
+  buildConfigModule,
+  buildModule,
+  type ConfigModuleKind,
+  devModule,
+} from './virtual-modules'
 
 export interface ConfigKitOptions extends DevConfigOptions {
-  buildEnvSchema?: ZodType
+  schemaModule: string
+  dts?: string | false
+  docker?: boolean
+  hmr?: boolean
   elementId?: string
   watch?: boolean
   serverRestart?: string[]
   fullReload?: string[]
-  envDts?: string | false
 }
 
 type Reaction = 'none' | 'restart' | 'full-reload' | 'hmr'
+type ModuleKind = ConfigModuleKind | 'build'
 
 const RESOLVED_IDS: Record<ModuleKind, string> = {
   public: '\0config-kit:public',
   server: '\0config-kit:private',
+  build: '\0config-kit:build',
 }
 const PLUGIN_FILE = fileURLToPath(import.meta.url)
 
 export function configKit({
-  buildEnvSchema,
+  schemaModule,
+  dts = 'src/config-kit.d.ts',
+  docker = false,
+  hmr = false,
   elementId = DEFAULT_CONFIG_ELEMENT_ID,
   watch = true,
   serverRestart = [],
   fullReload = [],
-  envDts = false,
   publicEnvVar = PUBLIC_ENV_VAR,
   privateEnvVar = PRIVATE_ENV_VAR,
+  buildEnvVar = BUILD_ENV_VAR,
   ...devOptions
-}: ConfigKitOptions = {}): Plugin {
-  let command: 'serve' | 'build' = 'serve'
+}: ConfigKitOptions): Plugin {
+  let schema: SchemaModule
+  let resolved: ResolvedConfig
   let dev: { reader: DevReader; state: DevState } | undefined
+  let buildConfig: unknown
   let failed = false
 
   async function handleChange(server: ViteDevServer) {
@@ -70,6 +87,7 @@ export function configKit({
       recovered: failed,
       serverRestart,
       fullReload,
+      hmr,
     })
     dev.state = next
     failed = false
@@ -81,39 +99,64 @@ export function configKit({
       .exhaustive()
   }
 
+  function schemaTarget(kind: ConfigModuleKind) {
+    return {
+      kind,
+      schemaFile: schema.file,
+      schemaExport:
+        kind === 'server' && schema.schemas.serverSchema
+          ? 'serverSchema'
+          : 'publicSchema',
+    }
+  }
+
   return {
     name: 'config-kit',
     enforce: 'pre',
 
-    config(userConfig, env) {
-      command = env.command
+    async config(userConfig, env) {
       const root = path.resolve(userConfig.root ?? process.cwd())
-      if (command === 'serve') {
+      schema = await importSchemaModule({
+        file: path.resolve(root, schemaModule),
+        root,
+        alias: userConfig.resolve?.alias,
+      })
+      if (dts) {
+        const dtsFile = path.resolve(root, dts)
+        writeIfChanged(
+          dtsFile,
+          renderConfigDts({
+            dtsFile,
+            schemaFile: schema.file,
+            schemas: schema.schemas,
+          }),
+        )
+      }
+      if (env.command === 'serve') {
         const reader = createDevReader(
-          { ...devOptions, publicEnvVar, privateEnvVar },
+          { ...devOptions, publicEnvVar, privateEnvVar, buildEnvVar },
+          schema.schemas,
           root,
         )
         dev = { reader, state: reader.load() }
-      }
-      if (!buildEnvSchema) return
-      return {
-        define: defineBuildEnv({
-          schema: buildEnvSchema,
-          env: {
-            ...dev?.state.env,
-            ...loadEnv(env.mode, resolveEnvDir(root, userConfig.envDir), ''),
-          },
-          dtsFile: envDts ? path.resolve(root, envDts) : undefined,
-        }),
+      } else {
+        buildConfig = loadBuildConfig(schema.schemas.buildSchema, buildEnvVar)
       }
     },
 
+    configResolved(config) {
+      resolved = config
+    },
+
     configureServer(server) {
-      const files = new Set(watch ? (dev?.reader.watchedFiles ?? []) : [])
-      if (files.size === 0) return
-      server.watcher.add([...files])
+      if (!watch || !dev) return
+      const configFiles = new Set(dev.reader.watchedFiles)
+      const schemaFiles = new Set(schema.dependencies)
+      server.watcher.add([...configFiles, ...schemaFiles])
       const onFile = (file: string) => {
-        if (files.has(path.resolve(file))) void handleChange(server)
+        const changed = path.resolve(file)
+        if (schemaFiles.has(changed)) void server.restart()
+        else if (configFiles.has(changed)) void handleChange(server)
       }
       server.watcher.on('change', onFile)
       server.watcher.on('add', onFile)
@@ -128,9 +171,19 @@ export function configKit({
             ? RESOLVED_IDS.server
             : this.error(`${PRIVATE_MODULE_ID} is server-only`),
         )
+        .with(BUILD_MODULE_ID, () =>
+          schema.schemas.buildSchema
+            ? RESOLVED_IDS.build
+            : this.error(
+                `${BUILD_MODULE_ID} needs a 'buildSchema' export in ${schema.file}`,
+              ),
+        )
         .when(
           () => isVirtualModule(importer),
-          () => this.resolve(id, PLUGIN_FILE, { ...options, skipSelf: true }),
+          () =>
+            id === schema.file
+              ? id
+              : this.resolve(id, PLUGIN_FILE, { ...options, skipSelf: true }),
         )
         .otherwise(() => null)
     },
@@ -138,10 +191,20 @@ export function configKit({
     load(id, options) {
       const kind = moduleKindOf(id)
       if (!kind) return
+      if (kind === 'build') {
+        return buildConfigModule(
+          dev ? dev.state.buildConfig : buildConfig,
+          schema.schemas.buildSchema,
+        )
+      }
       return dev
-        ? devModule(dev.state[kind])
+        ? devModule({
+            ...schemaTarget(kind),
+            loaded: dev.state[kind],
+            hmr,
+          })
         : buildModule({
-            kind,
+            ...schemaTarget(kind),
             ssr: options?.ssr === true,
             elementId,
             publicEnvVar,
@@ -150,7 +213,7 @@ export function configKit({
     },
 
     transformIndexHtml() {
-      if (command !== 'build') return
+      if (dev) return
       return [
         {
           tag: 'script',
@@ -159,6 +222,18 @@ export function configKit({
           injectTo: 'head-prepend',
         },
       ]
+    },
+
+    async closeBundle() {
+      if (!docker || dev || resolved.build.ssr) return
+      await writeDockerArtifacts({
+        root: resolved.root,
+        mode: resolved.mode,
+        alias: resolved.resolve.alias,
+        schemaFile: schema.file,
+        publicEnvVar,
+        pluginFile: PLUGIN_FILE,
+      })
     },
   }
 }
@@ -180,32 +255,33 @@ function reactionFor({
   recovered,
   serverRestart,
   fullReload,
+  hmr,
 }: {
   previous: DevState
   next: DevState
   recovered: boolean
   serverRestart: string[]
   fullReload: string[]
+  hmr: boolean
 }): Reaction {
   const paths = changedPaths(previous.server.raw, next.server.raw)
   const touches = (patterns: string[]) =>
     paths.some((changed) => matchesAny(changed, patterns))
   return match({
-    envChanged: !isEqual(previous.env, next.env),
+    buildChanged: !isEqual(previous.build.raw, next.build.raw),
     restart: touches(serverRestart),
-    reload: touches(fullReload),
-    changed: paths.length > 0,
-    recovered,
+    reload: !hmr || touches(fullReload),
+    changed: paths.length > 0 || recovered,
   })
     .returnType<Reaction>()
-    .with({ envChanged: true }, { restart: true }, () => 'restart')
+    .with({ buildChanged: true }, { restart: true }, () => 'restart')
+    .with({ changed: false }, () => 'none')
     .with({ reload: true }, () => 'full-reload')
-    .with({ changed: true }, { recovered: true }, () => 'hmr')
-    .otherwise(() => 'none')
+    .otherwise(() => 'hmr')
 }
 
 function configModules(server: ViteDevServer): ModuleNode[] {
-  return Object.values(RESOLVED_IDS)
+  return [RESOLVED_IDS.public, RESOLVED_IDS.server]
     .map((id) => server.moduleGraph.getModuleById(id))
     .filter((mod) => mod !== undefined)
 }
@@ -231,33 +307,9 @@ function moduleKindOf(id: string): ModuleKind | undefined {
   )
 }
 
-function defineBuildEnv({
-  schema,
-  env,
-  dtsFile,
-}: {
-  schema: ZodType
-  env: Record<string, string>
-  dtsFile: string | undefined
-}): Record<string, string> {
-  const parsed = parseOrThrow(schema, env, 'build env') as Record<
-    string,
-    unknown
-  >
-  if (dtsFile) writeIfChanged(dtsFile, renderEnvDts(schema))
-  return Object.fromEntries(
-    Object.entries(parsed).map(([key, value]) => [
-      `import.meta.env.${key}`,
-      JSON.stringify(value),
-    ]),
-  )
-}
-
-function resolveEnvDir(root: string, envDir: unknown): string {
-  return typeof envDir === 'string' ? path.resolve(root, envDir) : root
-}
-
 function writeIfChanged(file: string, content: string) {
   const current = existsSync(file) ? readFileSync(file, 'utf-8') : undefined
-  if (current !== content) writeFileSync(file, content)
+  if (current === content) return
+  mkdirSync(path.dirname(file), { recursive: true })
+  writeFileSync(file, content)
 }
