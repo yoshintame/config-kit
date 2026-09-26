@@ -1,11 +1,11 @@
 # @yoshintame/config-kit
 
-Lazy, [Zod](https://zod.dev)-validated configuration with pluggable sources, plus a [Vite](https://vite.dev) plugin that injects runtime config into SPAs, so one build image serves many environments.
+Lazy configuration validated by any [Standard Schema](https://standardschema.dev) library (Zod, Valibot, ArkType) with pluggable sources, plus a [Vite](https://vite.dev) plugin that injects runtime config into SPAs, so one build image serves many environments.
 
 - **Lazy by default.** Each schema validates its own section on first access; unrelated sections never block startup.
 - **Many consumers, one file.** Modules declare their own schemas over a shared config file.
 - **Pluggable sources.** Env vars, YAML/JSON files, a JSON `<script>` element, in-memory values, composed with `firstNonEmpty` and `mergeAll`.
-- **Runtime config for SPAs.** The Vite plugin serves config from YAML in dev, leaves an `envsubst` placeholder in `index.html` for production, and emits the container validator and nginx entrypoint hook.
+- **Runtime config for SPAs.** The Vite plugin serves config from YAML in dev, leaves an `envsubst` placeholder in `index.html` for production, validates config in the browser before the app runs, and emits the container validator and nginx entrypoint hook.
 
 ## Install
 
@@ -13,14 +13,15 @@ Lazy, [Zod](https://zod.dev)-validated configuration with pluggable sources, plu
 bun add @yoshintame/config-kit zod
 ```
 
-`zod@^4` is a peer dependency. The Vite plugin also needs `vite@^6.1 || ^7`.
+Bring any Standard Schema library; the examples use Zod 4. The Vite plugin also needs `vite@^6.1 || ^7`.
 
 | Entry point | Contents | Runtime |
 | --- | --- | --- |
 | `@yoshintame/config-kit` | Loader, source contract, composition, in-memory source | Any |
 | `@yoshintame/config-kit/node` | Env var, file and YAML sources | Node, Bun |
-| `@yoshintame/config-kit/browser` | JSON `<script>` element source, `bootstrap` | Browser |
+| `@yoshintame/config-kit/browser` | JSON `<script>` element source, default error screen | Browser |
 | `@yoshintame/config-kit/vite` | Vite plugin, `loadDevConfig` | Node, Bun |
+| `@yoshintame/config-kit/client` | Typings for the virtual modules | Types only |
 
 The core entry imports nothing from `node:*`. Under the `browser` condition, `/node` resolves to a stub whose functions throw.
 
@@ -41,11 +42,10 @@ import { z } from 'zod'
 import { defineConfig } from './config'
 
 export const dbConfig = defineConfig(
-  z
-    .object({
-      db: z.object({ url: z.url(), poolSize: z.number().default(10) }),
-    })
-    .meta({ title: 'db' }),
+  z.object({
+    db: z.object({ url: z.url(), poolSize: z.number().default(10) }),
+  }),
+  { name: 'db' },
 )
 
 dbConfig.db.url
@@ -69,32 +69,40 @@ A source returns the raw config or `undefined` when it has nothing. `describe()`
 
 ### `createSyncConfigLoader(source)`
 
-- **`defineConfig(schema)`** returns a read-only proxy over the parsed output of an object schema. The first property access loads the source and validates; the result is cached. Writes and deletes throw.
+- **`defineConfig(schema, { name? })`** returns a read-only proxy over the parsed output of an object schema. The first property access loads the source and validates; the result is cached. Writes and deletes throw.
 - **`validateAll()`** validates every registered schema now and throws one error listing all failures.
-- **`assertOnlyKnownTopKeys()`** throws if the raw config has top-level keys that no registered object schema declares. Use it in single-schema apps together with `validateAll()`; skip it when several modules share one file.
+- **`assertOnlyKnownTopKeys()`** throws if the raw config has top-level keys that no registered object schema declares. A schema that takes arbitrary keys (a record, a loose object) turns the check off. Use it in single-schema apps together with `validateAll()`; skip it when several modules share one file.
 - **`onChange(callback)`** subscribes to `source.watch`. On change the loader drops its caches before calling subscribers. Destructured values keep their old value.
 - **`loadRaw()`** returns the cached raw value without validation; **`reset()`** drops every cache.
 
 Validation errors name the schema and the source:
 
 ```
-Config validation failed for schema 'db' (loaded from file /srv/app/app.config.yaml):
+Config validation failed for 'db' (loaded from file /srv/app/app.config.yaml):
 ✖ Invalid input: expected string, received number
   → at db.url
 ```
 
-The schema name comes from `.meta({ id })`, `.meta({ title })` or `.describe()`. Zod registers `id` globally and throws when a module that declares it runs twice (HMR, `vi.resetModules`), so prefer `title` in modules that can re-execute.
+The name comes from the `name` option, otherwise from the schema's JSON Schema: a named definition, `$id`, `title` or `description` (Zod `.meta({ id })`, `.meta({ title })`, `.describe()`). Zod registers `id` globally and throws when a module that declares it runs twice (HMR, `vi.resetModules`), so prefer `name` or `title` in modules that can re-execute.
+
+### Standard Schema
+
+Schemas are validated through `~standard.validate`. config-kit is synchronous: a schema that validates asynchronously (an async refinement) fails with an error naming it.
+
+Checking unknown keys and listing the fields of `buildConfig` need the schema's shape, which comes from `~standard.jsonSchema`. Zod 4.2+ and ArkType implement it; wrap Valibot schemas in `toStandardJsonSchema()` from `@valibot/to-json-schema`. Zod Mini has none: turn unknown key checks off with `unknownKeys: 'ignore'` and skip the `build` section. Fields that JSON Schema cannot express (dates, transforms, custom checks) are fine, only the object structure is read.
 
 ### Composition
 
 - **`firstNonEmpty(sources)`** returns the first value that is not `undefined` or `null`; `{}` counts as a value. Throws with every source's `describe()` when all are empty.
 - **`mergeAll(sources)`** deep-merges values left to right: objects merge recursively, arrays and scalars are replaced, empty sources are skipped. Returns `undefined` when all are empty, so it composes with `firstNonEmpty`.
 - **`createInMemorySource(value, origin?)`** holds a value for tests and dev; `set(next)` replaces it and notifies watchers.
-- **`parseOrThrow(schema, raw, origin)`** validates once with the same error format, for eager checks outside a loader.
+- **`parseOrThrow(schema, raw, origin, { name?, knownKeys?, unknownKeys? })`** validates once with the same error format, for eager checks outside a loader.
+
+Failures are `ConfigKitError`s with `kind` (`missing`, `placeholder`, `parse`, `schema`), `section` and `source`.
 
 ## Node sources
 
-- `createProcessEnvSource({ envVar, parser? })` parses a JSON env var; an unset or empty variable yields `undefined`.
+- `createProcessEnvSource({ envVar, parser? })` parses a JSON env var; an unset variable yields `undefined`. An empty variable is a value, not a fallback to the next source, so it fails to parse as JSON.
 - `createFileSource({ path, parser })` reads and parses a file; a missing file yields `undefined`.
 - `createYamlEnvSource({ envVar, yamlFile, yamlPath? })` is `firstNonEmpty` over the env var and a YAML file, taken from `yamlPath` or found upward from `process.cwd()`.
 - `createYamlConfigLoader(options)` wraps `createYamlEnvSource` in a loader.
@@ -115,51 +123,85 @@ loader.validateAll()
 loader.assertOnlyKnownTopKeys()
 ```
 
-With the Vite plugin, use the loader from `virtual:config-kit` and `bootstrap` instead.
+With the Vite plugin, read `publicConfig` from `virtual:config-kit` instead.
 
 ## Vite plugin
 
-```ts
-import { configKit } from '@yoshintame/config-kit/vite'
-import { defineConfig } from 'vite'
-
-export default defineConfig({
-  plugins: [
-    configKit({
-      schemaModule: './src/config/schema.ts',
-      docker: true,
-      serverRestart: ['devServer.*'],
-    }),
-  ],
-})
-```
-
-### Schema module
-
-The plugin imports `schemaModule` itself, validates dev config against it and bundles it into the generated modules and the container validator. It reads three exports:
+Schemas and behavior live in one `config-kit.config.ts` next to `vite.config.ts`:
 
 ```ts
+import { defineConfigKit } from '@yoshintame/config-kit'
 import { z } from 'zod'
 
-export const publicSchema = z.object({
+const publicSchema = z.object({
   backend: z.object({ apiUrl: z.string() }),
 })
 
-export const serverSchema = publicSchema.extend({
-  devServer: z.object({ backendUrl: z.url() }),
+const config = defineConfigKit({
+  schemas: {
+    public: publicSchema,
+    server: publicSchema.extend({
+      devServer: z.object({ backendUrl: z.url() }),
+    }),
+    build: z.object({
+      msw: z.boolean().default(false),
+      devtools: z.boolean().default(false),
+      token: z.string().optional(),
+    }),
+  },
+  onInvalid(error, { renderDefault }) {
+    reportToTelemetry(error)
+    renderDefault()
+  },
+  sensitive: ['build.token'],
+  dev: { serverRestart: ['devServer.*'] },
+  docker: true,
 })
 
-export const buildSchema = z.object({
-  msw: z.boolean().default(false),
-  devtools: z.boolean().default(false),
+export default config
+
+declare module '@yoshintame/config-kit' {
+  interface Register {
+    config: typeof config
+  }
+}
+```
+
+```ts
+import { configKit, loadDevConfig } from '@yoshintame/config-kit/vite'
+import { defineConfig } from 'vite'
+
+import config from './config-kit.config'
+
+export default defineConfig(({ command }) => {
+  const server = command === 'serve' ? loadDevConfig(config) : undefined
+  return {
+    plugins: [configKit()],
+    server: { proxy: server && { '/api': server.devServer.backendUrl } },
+  }
 })
 ```
 
-- `publicSchema`, required: the runtime config the browser sees.
-- `serverSchema`, optional: `public` plus `private`, for dev-server settings and SSR. Defaults to `publicSchema`.
-- `buildSchema`, optional: build-time values inlined into the bundle.
+The plugin finds `config-kit.config.ts` in the Vite root; `configKit({ configFile })` points it elsewhere. `loadDevConfig(config)` reads the same files as the dev server and returns the validated server config, typed from the schemas.
 
-Editing the schema module restarts the dev server.
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `schemas.public` | required | The runtime config the browser sees |
+| `schemas.server` | `schemas.public` | `public` plus `private`, for dev-server settings and SSR |
+| `schemas.build` | none | Build-time values inlined into the bundle |
+| `onInvalid` | default screen | Reaction to invalid config in the browser, see below |
+| `unknownKeys` | `'strict'` | Top-level keys no schema declares: `'strict'` fails, `'warn'` logs, `'ignore'` skips the check. Applies to every section |
+| `sensitive` | `[]` | Paths under `build` that may hold secrets in dev, see below |
+| `dev` | | `yamlFile`, `yamlPath`, `localYamlFile`, `overlayEnvVar`, `watch`, `hmr`, `serverRestart`, `fullReload` |
+| `docker` | `false` | Emit the container validator and nginx hook |
+| `envVars` | `APP_PUBLIC_CONFIG`, `APP_PRIVATE_CONFIG`, `APP_BUILD_CONFIG` | Names of the three env vars |
+| `elementId` | `__CONFIG__` | Id of the JSON `<script>` element |
+
+Editing the config file or anything it imports restarts the dev server. The client bundle gets only `schemas.public` and `onInvalid` from it: the plugin drops the other sections and options and marks top-level declarations as side-effect free, so the server schema and its field names stay out. This needs `defineConfigKit({ schemas: { public, ... } })` written with object literals, without spreads; otherwise the plugin warns and ships the whole definition.
+
+### Types
+
+The `Register` augmentation types the virtual modules; nothing is generated. Keep `config-kit.config.ts` in the `tsconfig` that checks your app, so TypeScript sees both the augmentation and the module declarations the package references. Without either, add `/// <reference types="@yoshintame/config-kit/client" />`.
 
 ### Config file
 
@@ -183,49 +225,61 @@ In dev the plugin reads `config.yaml` (found upward from the Vite root), deep-me
 
 Any other top-level section is an error.
 
-`loadDevConfig({ schemaModule })` reads the same files from `vite.config.ts` and resolves to the validated server config, for proxy targets and similar settings.
-
 ### Virtual modules
 
 ```ts
-import { loader, publicConfig, source } from 'virtual:config-kit'
+import { publicConfig } from 'virtual:config-kit'
 import { buildConfig } from 'virtual:config-kit/build'
 
 if (buildConfig.msw) await import('./mocks')
 fetch(`${publicConfig.backend.apiUrl}/users`)
 ```
 
-| Module | Exports | Dev | Build |
+| Module | Export | Dev | Build |
 | --- | --- | --- | --- |
-| `virtual:config-kit` | `source`, `loader`, `publicConfig` | `public` section | Client: `createJsonScriptSource`. SSR: `APP_PUBLIC_CONFIG` |
-| `virtual:config-kit/private` | `source`, `loader`, `serverConfig` | `private` merged over `public` | `APP_PUBLIC_CONFIG` merged with `APP_PRIVATE_CONFIG` at runtime |
+| `virtual:config-kit` | `publicConfig` | `public` section | Client: the JSON `<script>`. SSR: `APP_PUBLIC_CONFIG` |
+| `virtual:config-kit/private` | `serverConfig` | `private` merged over `public` | `APP_PUBLIC_CONFIG` merged with `APP_PRIVATE_CONFIG` |
 | `virtual:config-kit/build` | `buildConfig` | `build` section | `APP_BUILD_CONFIG` over schema defaults |
+
+The config modules validate when they run. ES modules run their dependencies first, so the first module that reads config triggers the check before its own code, and a failure stops the whole module graph: modules that read config at import time never see invalid values, and `index.html` points straight at the app entry. On the server, SSR and the private module throw instead.
 
 `virtual:config-kit/private` is SSR-only; importing it from client code fails the build. `buildConfig` is an object literal in the bundle, so branches behind `false` flags and the dynamic imports inside them are dropped. Read its fields directly; passing the whole object around keeps every branch.
 
-The plugin writes typings for these modules to `dts` (default `src/config-kit.d.ts`, `false` to disable); keep the file inside your `tsconfig` includes.
+### Invalid config in the browser
+
+Without `onInvalid` the plugin shows the error text in `#root` (or `<body>`) and stops the app; the console shows the uncaught `ConfigKitError`. With it, the handler decides:
+
+| Handler | Result |
+| --- | --- |
+| Returns nothing | The app stops; the screen is up to the handler |
+| Returns a config | It is validated and the app runs with it |
+| Calls `renderDefault()` | The default screen |
+
+```ts
+onInvalid(error, { kind, section, source, renderDefault }) {
+  if (kind === 'placeholder') return localDefaults
+  void import('./src/config-error').then((m) => m.render(error))
+}
+```
+
+`kind` is `missing` (no `<script>` element), `placeholder` (the container did not substitute `${APP_PUBLIC_CONFIG}`), `parse` (broken JSON) or `schema` (failed validation or unknown keys). The handler is synchronous; start async work inside it, the app is already stopped. Code it imports dynamically is loaded only on failure and never reaches the container validator.
+
+### Secrets
+
+`private` never reaches the browser. Values in `build` are inlined into the bundle, so paths listed in `sensitive` (dev tokens, impersonation) are allowed only in `vite serve`: `vite build` fails when one of them is set.
+
+After a client build the plugin searches the emitted chunks and assets for string values of `private` and of `sensitive` paths, taken from `config.yaml` and its overlays when present and from `APP_PRIVATE_CONFIG` and `APP_BUILD_CONFIG`, and fails the build naming the path and the chunk. Values shorter than 8 characters and values that also appear in `public` are skipped. Dev-server responses are not scanned.
+
+The build also fails when `index.html` lost the `${APP_PUBLIC_CONFIG}` placeholder, for example to a plugin that rewrites the HTML.
 
 ### Dev reactions
 
 | Change | Reaction |
 | --- | --- |
-| Schema module, `build` section, or a path in `serverRestart` | Dev server restart |
+| Config file, its imports, `build` section, or a path in `dev.serverRestart` | Dev server restart |
 | `public` or `private` | Full page reload |
-| Same, with `hmr: true` | The source updates in place and `loader.onChange` subscribers run; paths in `fullReload` still reload the page |
+| Same, with `dev.hmr: true` | Config modules update in place; reads through `publicConfig` see new values, destructured values keep the old ones. Paths in `dev.fullReload` still reload the page |
 | Invalid config | Error overlay; the last valid config stays active |
-
-### Fail-fast entry
-
-Modules often read config at import time, so validate before the app graph loads:
-
-```ts
-import { bootstrap } from '@yoshintame/config-kit/browser'
-import { loader } from 'virtual:config-kit'
-
-bootstrap(loader, () => import('./app'))
-```
-
-`bootstrap` runs `validateAll()` and `assertOnlyKnownTopKeys()`, then imports the app. On failure it logs the error and shows its text in `#root` (or `<body>`). Pass `{ renderError }` for a custom screen.
 
 ### Docker
 
@@ -237,7 +291,7 @@ A production build leaves this in `index.html`:
 
 With `docker: true`, `vite build` also writes `dist-config/`:
 
-- `validate.mjs`: a self-contained validator (schema, Zod and core bundled) that checks `APP_PUBLIC_CONFIG` like `bootstrap` does and exits with 1 and the error. Runs with `node` or `bun`, no `node_modules`.
+- `validate.mjs`: a self-contained validator (public schema, schema library and core bundled, `onInvalid` left out) that checks `APP_PUBLIC_CONFIG` like the browser does and exits with 1 and the error. Runs with `node` or `bun`, no `node_modules`.
 - `docker-entrypoint.d/40-config-kit-inject.sh`: a hook for the official nginx image entrypoint. On every start it requires a non-empty `APP_PUBLIC_CONFIG`, escapes `<` so the JSON cannot close the script element, and renders `index.html` with `envsubst` from a template kept outside the docroot.
 
 ```dockerfile

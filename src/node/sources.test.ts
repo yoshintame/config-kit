@@ -40,11 +40,17 @@ describe('createProcessEnvSource', () => {
     })
   })
 
-  test('returns undefined when unset or empty', () => {
+  test('returns undefined when unset', () => {
     const source = createProcessEnvSource({ envVar: ENV_VAR })
     expect(source.loadSync()).toBeUndefined()
+  })
+
+  test('treats an empty variable as a value', () => {
     process.env[ENV_VAR] = ''
-    expect(source.loadSync()).toBeUndefined()
+    const source = createProcessEnvSource({ envVar: ENV_VAR })
+    expect(() => source.loadSync()).toThrow(
+      `Failed to parse env ${ENV_VAR}: Unexpected end of JSON input`,
+    )
   })
 
   test('uses custom parser', () => {
@@ -154,7 +160,7 @@ describe('createYamlConfigLoader', () => {
       z.object({ db: z.object({ host: z.string() }) }).meta({ id: 'db' }),
     )
     expect(() => config.db).toThrow(
-      `Config validation failed for schema 'db' (loaded from file ${yamlPath})`,
+      `Config validation failed for 'db' (loaded from file ${yamlPath})`,
     )
   })
 

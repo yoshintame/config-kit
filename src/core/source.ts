@@ -1,3 +1,5 @@
+import { ConfigKitError } from './errors'
+
 export interface SyncConfigSource {
   loadSync(): unknown
   describe(): string
@@ -18,9 +20,11 @@ export function parseWith(parser: Parser, input: string, origin: string) {
   try {
     return parser.parse(input)
   } catch (error) {
-    throw new Error(`Failed to parse ${origin}: ${errorMessage(error)}`, {
-      cause: error,
-    })
+    throw new ConfigKitError(
+      `Failed to parse ${origin}: ${errorMessage(error)}`,
+      { kind: 'parse', section: undefined, source: origin },
+      { cause: error },
+    )
   }
 }
 

@@ -4,6 +4,7 @@ export const createFileSource = unavailable
 export const createProcessEnvSource = unavailable
 export const createYamlEnvSource = unavailable
 export const createYamlConfigLoader = unavailable
+export const resolveEnvConfig = unavailable
 export const yamlParser: Parser = { parse: unavailable }
 
 function unavailable(): never {

@@ -7,5 +7,18 @@
         "noNonNullAssertion": "off"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/core/define-config-kit.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noEmptyInterface": "off",
+            "noConfusingVoidType": "off"
+          }
+        }
+      }
+    }
+  ]
 }

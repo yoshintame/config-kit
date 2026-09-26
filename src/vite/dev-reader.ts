@@ -1,34 +1,25 @@
 import path from 'node:path'
 
 import { isNil, isPlainObject } from 'es-toolkit'
+import { get } from 'es-toolkit/compat'
 import { findUpSync } from 'find-up'
-import type { AliasOptions } from 'vite'
-import type { ZodType } from 'zod'
 
 import {
+  type ConfigKitDefinition,
+  type ConfigKitSchemas,
   deepMerge,
   mergeAll,
   parseOrThrow,
+  type ServerConfigOf,
+  type StandardSchemaV1,
   type SyncConfigSource,
 } from '../core'
 import { createFileSource, createProcessEnvSource, yamlParser } from '../node'
 import {
-  BUILD_ENV_VAR,
-  OVERLAY_ENV_VAR,
-  PRIVATE_ENV_VAR,
-  PUBLIC_ENV_VAR,
-} from './constants'
-import { importSchemaModule, type Schemas } from './schema-module'
-
-export interface DevConfigOptions {
-  publicEnvVar?: string
-  privateEnvVar?: string
-  buildEnvVar?: string
-  yamlFile?: string
-  yamlPath?: string
-  localYamlFile?: string | false
-  overlayEnvVar?: string
-}
+  type ConfigKitSettings,
+  resolveSettings,
+  type Section,
+} from './config-file'
 
 export interface LoadedConfig {
   raw: unknown
@@ -50,67 +41,29 @@ export interface DevReader {
 
 const SECTIONS = ['public', 'private', 'build']
 
-export async function loadDevConfig<T = unknown>({
-  schemaModule,
-  root = process.cwd(),
-  alias,
-  ...options
-}: DevConfigOptions & {
-  schemaModule: string
-  root?: string
-  alias?: AliasOptions
-}): Promise<T> {
-  const { schemas } = await importSchemaModule({
-    file: path.resolve(root, schemaModule),
-    root,
-    alias,
-  })
-  return createDevReader(options, schemas, root).load().serverConfig as T
+export function loadDevConfig<S extends ConfigKitSchemas>(
+  definition: ConfigKitDefinition<S>,
+  { root = process.cwd() }: { root?: string } = {},
+): ServerConfigOf<S> {
+  return createDevReader(resolveSettings(definition), root).load()
+    .serverConfig as ServerConfigOf<S>
 }
 
 export function createDevReader(
-  {
-    publicEnvVar = PUBLIC_ENV_VAR,
-    privateEnvVar = PRIVATE_ENV_VAR,
-    buildEnvVar = BUILD_ENV_VAR,
-    yamlFile = 'config.yaml',
-    yamlPath,
-    localYamlFile = 'config.local.yaml',
-    overlayEnvVar = OVERLAY_ENV_VAR,
-  }: DevConfigOptions,
-  { publicSchema, serverSchema, buildSchema }: Schemas,
+  settings: ConfigKitSettings,
   root: string,
+  warn: (message: string) => void = console.warn,
 ): DevReader {
-  const configPath = yamlPath
-    ? path.resolve(root, yamlPath)
-    : (findUpSync(yamlFile, { cwd: root }) ?? path.resolve(root, yamlFile))
-  const overlays = [
-    localYamlFile === false ? undefined : localYamlFile,
-    process.env[overlayEnvVar],
-  ]
-    .filter((file) => !isNil(file))
-    .map((file) => path.resolve(path.dirname(configPath), file))
-  const watchedFiles = [configPath, ...overlays]
-  const yaml = mergeAll(
-    watchedFiles.map((file) =>
-      createFileSource({ path: file, parser: yamlParser }),
-    ),
-  )
-  const publicEnv = createProcessEnvSource({ envVar: publicEnvVar })
-  const privateEnv = createProcessEnvSource({ envVar: privateEnvVar })
-  const buildEnv = createProcessEnvSource({ envVar: buildEnvVar })
+  const { yaml, watchedFiles } = yamlSource(settings, root)
+  const { envVars } = settings
+  const publicEnv = createProcessEnvSource({ envVar: envVars.public })
+  const privateEnv = createProcessEnvSource({ envVar: envVars.private })
+  const buildEnv = createProcessEnvSource({ envVar: envVars.build })
+  const parse = sectionParser(settings, warn)
+  const { schemas } = settings.definition
 
   function load(): DevState {
-    const document = yaml.loadSync()
-    const sections = isPlainObject(document) ? document : {}
-    const unknown = Object.keys(sections).filter(
-      (key) => !SECTIONS.includes(key),
-    )
-    if (unknown.length > 0) {
-      throw new Error(
-        `Unknown sections in ${yaml.describe()}: ${unknown.join(', ')} (expected ${SECTIONS.join(', ')})`,
-      )
-    }
+    const sections = yamlSections(yaml)
     const inYaml = (key: string): LoadedConfig => ({
       raw: sections[key],
       origin: `${yaml.describe()} (${key})`,
@@ -122,7 +75,7 @@ export function createDevReader(
         `Config not found in any source: ${publicEnv.describe()}, ${publicConfig.origin}`,
       )
     }
-    parseOrThrow(publicSchema, publicConfig.raw, publicConfig.origin)
+    parse('public', schemas.public, publicConfig)
 
     const privateConfig = fromEnvOr(privateEnv, inYaml('private'))
     const server: LoadedConfig =
@@ -138,38 +91,102 @@ export function createDevReader(
     return {
       public: publicConfig,
       server,
-      serverConfig: parseOrThrow(
-        serverSchema ?? publicSchema,
-        server.raw,
-        server.origin,
-      ),
+      serverConfig: parse('server', schemas.server ?? schemas.public, server),
       build,
-      buildConfig: parseBuildConfig(buildSchema, build),
+      buildConfig: parseBuildConfig(settings, build, parse),
     }
   }
 
   return { load, watchedFiles }
 }
 
+export function yamlSource(
+  {
+    dev: { yamlFile, yamlPath, localYamlFile, overlayEnvVar },
+  }: ConfigKitSettings,
+  root: string,
+): { yaml: SyncConfigSource; watchedFiles: string[] } {
+  const configPath = yamlPath
+    ? path.resolve(root, yamlPath)
+    : (findUpSync(yamlFile, { cwd: root }) ?? path.resolve(root, yamlFile))
+  const overlays = [
+    localYamlFile === false ? undefined : localYamlFile,
+    process.env[overlayEnvVar],
+  ]
+    .filter((file) => !isNil(file))
+    .map((file) => path.resolve(path.dirname(configPath), file))
+  const watchedFiles = [configPath, ...overlays]
+  const yaml = mergeAll(
+    watchedFiles.map((file) =>
+      createFileSource({ path: file, parser: yamlParser }),
+    ),
+  )
+  return { yaml, watchedFiles }
+}
+
+export function yamlSections(yaml: SyncConfigSource): Record<string, unknown> {
+  const document = yaml.loadSync()
+  const sections = isPlainObject(document) ? document : {}
+  const unknown = Object.keys(sections).filter((key) => !SECTIONS.includes(key))
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown sections in ${yaml.describe()}: ${unknown.join(', ')} (expected ${SECTIONS.join(', ')})`,
+    )
+  }
+  return sections
+}
+
+type SectionParser = (
+  section: Section,
+  schema: StandardSchemaV1,
+  loaded: LoadedConfig,
+) => unknown
+
+function sectionParser(
+  settings: ConfigKitSettings,
+  warn: (message: string) => void,
+): SectionParser {
+  return (section, schema, { raw, origin }) =>
+    parseOrThrow(schema, raw, origin, {
+      name: section,
+      knownKeys: settings.knownKeys[section],
+      unknownKeys: settings.unknownKeys,
+      warn,
+    })
+}
+
 export function loadBuildConfig(
-  schema: ZodType | undefined,
-  envVar = BUILD_ENV_VAR,
+  settings: ConfigKitSettings,
+  warn: (message: string) => void = console.warn,
 ): unknown {
-  const env = createProcessEnvSource({ envVar })
-  return parseBuildConfig(schema, {
-    raw: env.loadSync(),
-    origin: env.describe(),
-  })
+  const env = createProcessEnvSource({ envVar: settings.envVars.build })
+  const loaded = { raw: env.loadSync(), origin: env.describe() }
+  const buildConfig = parseBuildConfig(
+    settings,
+    loaded,
+    sectionParser(settings, warn),
+  )
+  const leaked = settings.sensitive.filter(
+    (entry) => get(buildConfig, entry.slice('build.'.length)) !== undefined,
+  )
+  if (leaked.length > 0) {
+    throw new Error(
+      `Sensitive build config is set in ${loaded.origin}: ${leaked.join(', ')}. Sensitive values are allowed only in vite serve, a build would inline them into the bundle`,
+    )
+  }
+  return buildConfig
 }
 
 function parseBuildConfig(
-  schema: ZodType | undefined,
-  { raw, origin }: LoadedConfig,
+  { definition: { schemas } }: ConfigKitSettings,
+  loaded: LoadedConfig,
+  parse: SectionParser,
 ): unknown {
-  if (schema) return parseOrThrow(schema, raw ?? {}, origin)
-  if (raw !== undefined) {
+  if (schemas.build)
+    return parse('build', schemas.build, { ...loaded, raw: loaded.raw ?? {} })
+  if (loaded.raw !== undefined) {
     throw new Error(
-      `Build config found in ${origin}, but the schema module exports no 'buildSchema'`,
+      `Build config found in ${loaded.origin}, but the config file defines no schemas.build`,
     )
   }
   return undefined

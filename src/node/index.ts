@@ -1,3 +1,4 @@
+export { type ResolveEnvConfigOptions, resolveEnvConfig } from './env-config'
 export { createFileSource, type FileSourceOptions } from './file-source'
 export {
   createProcessEnvSource,

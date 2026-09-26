@@ -1,4 +1,3 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -6,26 +5,22 @@ import { isEqual } from 'es-toolkit'
 import { match } from 'ts-pattern'
 import type { ModuleNode, Plugin, ResolvedConfig, ViteDevServer } from 'vite'
 
-import { DEFAULT_CONFIG_ELEMENT_ID } from '../browser'
 import { changedPaths, matchesAny } from './changed-paths'
-import { renderConfigDts } from './config-dts'
+import { transformConfigFile } from './client-split'
+import { type ConfigFile, importConfigFile } from './config-file'
 import {
-  BUILD_ENV_VAR,
   BUILD_MODULE_ID,
-  PRIVATE_ENV_VAR,
   PRIVATE_MODULE_ID,
-  PUBLIC_ENV_VAR,
   PUBLIC_MODULE_ID,
 } from './constants'
 import {
   createDevReader,
-  type DevConfigOptions,
   type DevReader,
   type DevState,
   loadBuildConfig,
 } from './dev-reader'
 import { writeDockerArtifacts } from './docker'
-import { importSchemaModule, type SchemaModule } from './schema-module'
+import { collectSecrets, findLeaks, type Secret } from './leaks'
 import {
   buildConfigModule,
   buildModule,
@@ -33,15 +28,8 @@ import {
   devModule,
 } from './virtual-modules'
 
-export interface ConfigKitOptions extends DevConfigOptions {
-  schemaModule: string
-  dts?: string | false
-  docker?: boolean
-  hmr?: boolean
-  elementId?: string
-  watch?: boolean
-  serverRestart?: string[]
-  fullReload?: string[]
+export interface ConfigKitOptions {
+  configFile?: string
 }
 
 type Reaction = 'none' | 'restart' | 'full-reload' | 'hmr'
@@ -54,24 +42,12 @@ const RESOLVED_IDS: Record<ModuleKind, string> = {
 }
 const PLUGIN_FILE = fileURLToPath(import.meta.url)
 
-export function configKit({
-  schemaModule,
-  dts = 'src/config-kit.d.ts',
-  docker = false,
-  hmr = false,
-  elementId = DEFAULT_CONFIG_ELEMENT_ID,
-  watch = true,
-  serverRestart = [],
-  fullReload = [],
-  publicEnvVar = PUBLIC_ENV_VAR,
-  privateEnvVar = PRIVATE_ENV_VAR,
-  buildEnvVar = BUILD_ENV_VAR,
-  ...devOptions
-}: ConfigKitOptions): Plugin {
-  let schema: SchemaModule
+export function configKit({ configFile }: ConfigKitOptions = {}): Plugin {
+  let loaded: ConfigFile
   let resolved: ResolvedConfig
   let dev: { reader: DevReader; state: DevState } | undefined
   let buildConfig: unknown
+  let secrets: Secret[] = []
   let failed = false
 
   async function handleChange(server: ViteDevServer) {
@@ -81,6 +57,7 @@ export function configKit({
       failed = true
       return
     }
+    const { serverRestart, fullReload, hmr } = loaded.settings.dev
     const reaction = reactionFor({
       previous: dev.state,
       next,
@@ -99,15 +76,8 @@ export function configKit({
       .exhaustive()
   }
 
-  function schemaTarget(kind: ConfigModuleKind) {
-    return {
-      kind,
-      schemaFile: schema.file,
-      schemaExport:
-        kind === 'server' && schema.schemas.serverSchema
-          ? 'serverSchema'
-          : 'publicSchema',
-    }
+  function isClientBuild() {
+    return !dev && !resolved.build.ssr
   }
 
   return {
@@ -116,31 +86,17 @@ export function configKit({
 
     async config(userConfig, env) {
       const root = path.resolve(userConfig.root ?? process.cwd())
-      schema = await importSchemaModule({
-        file: path.resolve(root, schemaModule),
+      loaded = await importConfigFile({
         root,
+        configFile,
         alias: userConfig.resolve?.alias,
       })
-      if (dts) {
-        const dtsFile = path.resolve(root, dts)
-        writeIfChanged(
-          dtsFile,
-          renderConfigDts({
-            dtsFile,
-            schemaFile: schema.file,
-            schemas: schema.schemas,
-          }),
-        )
-      }
       if (env.command === 'serve') {
-        const reader = createDevReader(
-          { ...devOptions, publicEnvVar, privateEnvVar, buildEnvVar },
-          schema.schemas,
-          root,
-        )
+        const reader = createDevReader(loaded.settings, root)
         dev = { reader, state: reader.load() }
       } else {
-        buildConfig = loadBuildConfig(schema.schemas.buildSchema, buildEnvVar)
+        buildConfig = loadBuildConfig(loaded.settings)
+        secrets = collectSecrets(loaded.settings, root)
       }
     },
 
@@ -149,9 +105,9 @@ export function configKit({
     },
 
     configureServer(server) {
-      if (!watch || !dev) return
+      if (!loaded.settings.dev.watch || !dev) return
       const configFiles = new Set(dev.reader.watchedFiles)
-      const schemaFiles = new Set(schema.dependencies)
+      const schemaFiles = new Set(loaded.dependencies)
       server.watcher.add([...configFiles, ...schemaFiles])
       const onFile = (file: string) => {
         const changed = path.resolve(file)
@@ -172,16 +128,16 @@ export function configKit({
             : this.error(`${PRIVATE_MODULE_ID} is server-only`),
         )
         .with(BUILD_MODULE_ID, () =>
-          schema.schemas.buildSchema
+          loaded.settings.definition.schemas.build
             ? RESOLVED_IDS.build
             : this.error(
-                `${BUILD_MODULE_ID} needs a 'buildSchema' export in ${schema.file}`,
+                `${BUILD_MODULE_ID} needs schemas.build in ${loaded.file}`,
               ),
         )
         .when(
           () => isVirtualModule(importer),
           () =>
-            id === schema.file
+            id === loaded.file
               ? id
               : this.resolve(id, PLUGIN_FILE, { ...options, skipSelf: true }),
         )
@@ -191,25 +147,29 @@ export function configKit({
     load(id, options) {
       const kind = moduleKindOf(id)
       if (!kind) return
+      const { settings } = loaded
       if (kind === 'build') {
         return buildConfigModule(
           dev ? dev.state.buildConfig : buildConfig,
-          schema.schemas.buildSchema,
+          settings.buildShape,
         )
       }
+      const target = { kind, configFile: loaded.file, settings }
       return dev
         ? devModule({
-            ...schemaTarget(kind),
+            ...target,
             loaded: dev.state[kind],
-            hmr,
+            hmr: settings.dev.hmr,
           })
-        : buildModule({
-            ...schemaTarget(kind),
-            ssr: options?.ssr === true,
-            elementId,
-            publicEnvVar,
-            privateEnvVar,
-          })
+        : buildModule({ ...target, ssr: options?.ssr === true })
+    },
+
+    transform: {
+      order: 'post',
+      handler(code, id, options) {
+        if (options?.ssr || id.split('?')[0] !== loaded.file) return
+        return transformConfigFile(this, code, { keepOnInvalid: true })
+      },
     },
 
     transformIndexHtml() {
@@ -217,25 +177,56 @@ export function configKit({
       return [
         {
           tag: 'script',
-          attrs: { type: 'application/json', id: elementId },
-          children: `\${${publicEnvVar}}`,
+          attrs: { type: 'application/json', id: loaded.settings.elementId },
+          children: placeholder(loaded.settings.envVars.public),
           injectTo: 'head-prepend',
         },
       ]
     },
 
+    generateBundle: {
+      order: 'post',
+      handler(_options, bundle) {
+        if (!isClientBuild()) return
+        const expected = placeholder(loaded.settings.envVars.public)
+        const pages = Object.values(bundle).filter(
+          (output) =>
+            output.type === 'asset' && output.fileName.endsWith('.html'),
+        )
+        const missing = pages.filter(
+          (page) =>
+            page.type === 'asset' && !String(page.source).includes(expected),
+        )
+        if (missing.length > 0) {
+          this.error(
+            `${missing.map((page) => page.fileName).join(', ')} lost the ${expected} placeholder: the container cannot inject the config. Check plugins that rewrite index.html`,
+          )
+        }
+        const leaks = findLeaks(bundle, secrets)
+        if (leaks.length > 0) {
+          this.error(
+            `Private or sensitive config values found in the bundle: ${leaks.join(', ')}`,
+          )
+        }
+      },
+    },
+
     async closeBundle() {
-      if (!docker || dev || resolved.build.ssr) return
+      if (!loaded.settings.docker || !isClientBuild()) return
       await writeDockerArtifacts({
         root: resolved.root,
         mode: resolved.mode,
         alias: resolved.resolve.alias,
-        schemaFile: schema.file,
-        publicEnvVar,
+        configFile: loaded.file,
+        settings: loaded.settings,
         pluginFile: PLUGIN_FILE,
       })
     },
   }
+}
+
+function placeholder(envVar: string): string {
+  return `\${${envVar}}`
 }
 
 function tryLoad(reader: DevReader, server: ViteDevServer) {
@@ -305,11 +296,4 @@ function moduleKindOf(id: string): ModuleKind | undefined {
   return (Object.keys(RESOLVED_IDS) as ModuleKind[]).find(
     (kind) => RESOLVED_IDS[kind] === id,
   )
-}
-
-function writeIfChanged(file: string, content: string) {
-  const current = existsSync(file) ? readFileSync(file, 'utf-8') : undefined
-  if (current === content) return
-  mkdirSync(path.dirname(file), { recursive: true })
-  writeFileSync(file, content)
 }

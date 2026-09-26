@@ -37,7 +37,7 @@ describe('createSyncConfigLoader', () => {
         .meta({ id: 'db-toolkit' }),
     )
     expect(() => config.db).toThrow(
-      /Config validation failed for schema 'db-toolkit' \(loaded from in-memory\):\n.*db\.host/s,
+      /Config validation failed for 'db-toolkit' \(loaded from in-memory\):\n.*db\.host/s,
     )
   })
 
@@ -46,7 +46,7 @@ describe('createSyncConfigLoader', () => {
     const config = loader.defineConfig(
       z.object({ a: z.number() }).meta({ title: 'crm-public' }),
     )
-    expect(() => config.a).toThrow(/for schema 'crm-public'/)
+    expect(() => config.a).toThrow(/for 'crm-public'/)
   })
 
   test('validation error falls back to schema description', () => {
@@ -54,7 +54,7 @@ describe('createSyncConfigLoader', () => {
     const config = loader.defineConfig(
       z.object({ a: z.number() }).describe('tg-helpers'),
     )
-    expect(() => config.a).toThrow(/for schema 'tg-helpers'/)
+    expect(() => config.a).toThrow(/for 'tg-helpers'/)
   })
 
   test('validation error without schema name', () => {
@@ -163,7 +163,7 @@ describe('createSyncConfigLoader', () => {
       loader.defineConfig(z.object({ a: z.number() }).meta({ id: 'first' }))
       loader.defineConfig(z.object({ b: z.string() }).meta({ id: 'second' }))
       expect(() => loader.validateAll()).toThrow(
-        /schema 'first'[\s\S]*\n\nConfig validation failed for schema 'second'/,
+        /for 'first'[\s\S]*\n\nConfig validation failed for 'second'/,
       )
     })
   })
@@ -204,21 +204,18 @@ describe('createSyncConfigLoader', () => {
       )
     })
 
-    test('throws on unnamed non-object schema', () => {
+    test('accepts any key when a schema takes arbitrary keys', () => {
       const loader = createSyncConfigLoader(createInMemorySource({ a: 1 }))
+      loader.defineConfig(z.object({ b: z.number().optional() }))
       loader.defineConfig(z.record(z.string(), z.number()))
-      expect(() => loader.assertOnlyKnownTopKeys()).toThrow(
-        /only object schemas$/,
-      )
+      expect(() => loader.assertOnlyKnownTopKeys()).not.toThrow()
     })
 
-    test('throws on non-object schema', () => {
+    test('throws on a non-object schema', () => {
       const loader = createSyncConfigLoader(createInMemorySource({ a: 1 }))
-      loader.defineConfig(
-        z.record(z.string(), z.number()).meta({ id: 'records' }),
-      )
+      loader.defineConfig(z.array(z.number()).meta({ title: 'list' }) as never)
       expect(() => loader.assertOnlyKnownTopKeys()).toThrow(
-        /only object schemas, got 'records'/,
+        /'list': checking unknown keys needs an object schema/,
       )
     })
 

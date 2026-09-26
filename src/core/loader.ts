@@ -1,13 +1,25 @@
 import { isPlainObject } from 'es-toolkit'
-import type { ZodType, z } from 'zod'
 
-import { parseOrThrow, schemaName } from './parse-or-throw'
+import { liveView } from './live-view'
+import { parseOrThrow } from './parse-or-throw'
 import { errorMessage, type SyncConfigSource } from './source'
+import {
+  type StandardSchemaV1,
+  schemaTitle,
+  topLevelKeys,
+} from './standard-schema'
 
-export type ObjectSchema = ZodType<Record<string, unknown>>
+export type ObjectSchema = StandardSchemaV1<unknown, Record<string, unknown>>
+
+export interface DefineConfigOptions {
+  name?: string
+}
 
 export interface SyncConfigLoader {
-  defineConfig<T extends ObjectSchema>(schema: T): z.infer<T>
+  defineConfig<T extends ObjectSchema>(
+    schema: T,
+    options?: DefineConfigOptions,
+  ): StandardSchemaV1.InferOutput<T>
   loadRaw(): unknown
   reset(): void
   validateAll(): void
@@ -28,33 +40,33 @@ export function createSyncConfigLoader(
     return rawCache.value
   }
 
-  function defineConfig<T extends ObjectSchema>(schema: T): z.infer<T> {
-    let validated: { value: z.infer<T> } | undefined
+  function defineConfig<T extends ObjectSchema>(
+    schema: T,
+    { name }: DefineConfigOptions = {},
+  ): StandardSchemaV1.InferOutput<T> {
+    type Output = StandardSchemaV1.InferOutput<T>
+    let validated: { value: Output } | undefined
 
-    function load(): z.infer<T> {
+    function load(): Output {
       validated ??= {
-        value: parseOrThrow(schema, loadRaw(), source.describe()),
+        value: parseOrThrow(schema, loadRaw(), source.describe(), { name }),
       }
       return validated.value
     }
 
     registered.push({
       schema,
+      name,
       load,
       reset: () => {
         validated = undefined
       },
     })
 
-    return new Proxy({} as z.infer<T>, {
-      get: (_target, prop) => Reflect.get(load(), prop),
-      has: (_target, prop) => Reflect.has(load(), prop),
-      ownKeys: () => Reflect.ownKeys(load()),
-      getOwnPropertyDescriptor: (_target, prop) =>
-        configurable(Reflect.getOwnPropertyDescriptor(load(), prop)),
-      set: () => false,
-      defineProperty: () => false,
-      deleteProperty: () => false,
+    return liveView({
+      get value() {
+        return load()
+      },
     })
   }
 
@@ -84,9 +96,11 @@ export function createSyncConfigLoader(
       )
     }
 
-    const known = new Set(
-      registered.flatMap(({ schema }) => requireTopKeys(schema)),
+    const keys = registered.map(({ schema, name }) =>
+      topLevelKeys(schema, name ?? schemaTitle(schema) ?? 'schema'),
     )
+    if (keys.includes(undefined)) return
+    const known = new Set(keys.flat())
     const unknown = Object.keys(raw).filter((key) => !known.has(key))
     if (unknown.length > 0) {
       throw new Error(
@@ -120,37 +134,8 @@ export function createSyncConfigLoader(
 }
 
 interface RegisteredSchema {
-  schema: ZodType
+  schema: ObjectSchema
+  name: string | undefined
   load(): unknown
   reset(): void
-}
-
-interface SchemaDef {
-  type: string
-  shape?: Record<string, unknown>
-  in?: ZodType
-  innerType?: ZodType
-  getter?: () => ZodType
-}
-
-function requireTopKeys(schema: ZodType): string[] {
-  const keys = topKeysOf(schema)
-  if (keys) return keys
-  const name = schemaName(schema)
-  throw new Error(
-    `assertOnlyKnownTopKeys supports only object schemas${name ? `, got '${name}'` : ''}`,
-  )
-}
-
-function topKeysOf(schema: ZodType): string[] | undefined {
-  const def = schema._zod.def as SchemaDef
-  if (def.type === 'object') return Object.keys(def.shape ?? {})
-  const inner = def.in ?? def.innerType ?? def.getter?.()
-  return inner ? topKeysOf(inner) : undefined
-}
-
-function configurable(
-  descriptor: PropertyDescriptor | undefined,
-): PropertyDescriptor | undefined {
-  return descriptor ? { ...descriptor, configurable: true } : undefined
 }

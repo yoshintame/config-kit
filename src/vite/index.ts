@@ -1,3 +1,4 @@
+export { DEFAULT_CONFIG_FILE } from './config-file'
 export {
   BUILD_ENV_VAR,
   BUILD_MODULE_ID,
@@ -7,5 +8,5 @@ export {
   PUBLIC_ENV_VAR,
   PUBLIC_MODULE_ID,
 } from './constants'
-export { type DevConfigOptions, loadDevConfig } from './dev-reader'
+export { loadDevConfig } from './dev-reader'
 export { type ConfigKitOptions, configKit } from './plugin'

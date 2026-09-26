@@ -7,24 +7,23 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  statSync,
   symlinkSync,
-  utimesSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { build, createServer, type ViteDevServer } from 'vite'
+import { build, createServer, type Plugin, type ViteDevServer } from 'vite'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { z } from 'zod'
 
+import { defineConfigKit } from '../core'
 import { loadDevConfig } from './dev-reader'
 import { INJECT_HOOK_FILE, VALIDATOR_FILE } from './docker'
-import { type ConfigKitOptions, configKit } from './plugin'
+import { configKit } from './plugin'
 
 type ConfigModule = {
-  source: { loadSync(): unknown; describe(): string }
   publicConfig?: unknown
   serverConfig?: unknown
   buildConfig?: unknown
@@ -46,20 +45,14 @@ const sourceResolve = {
   ],
 }
 
-const PUBLIC_SCHEMA = [
-  "import { z } from 'zod'",
-  'export const publicSchema = z',
-  '  .object({ backend: z.object({ apiUrl: z.url() }) })',
-  "  .meta({ title: 'public' })",
-]
 const SERVER_SCHEMA =
-  "export const serverSchema = publicSchema.extend({ db: z.object({ url: z.string().transform((url) => url.toUpperCase()) }) }).meta({ title: 'server' })"
+  'server: publicSchema.extend({ db: z.object({ url: z.string().transform((url) => url.toUpperCase()) }) })'
 const BUILD_SCHEMA =
-  'export const buildSchema = z.object({ devtools: z.boolean().default(false), actAs: z.string().optional() })'
+  'build: z.object({ devtools: z.boolean().default(false), actAs: z.string().optional() })'
 
 let root: string
 let yamlPath: string
-let schemaPath: string
+let configPath: string
 let server: ViteDevServer | undefined
 
 function writeYaml(apiUrl: unknown, extra = '', tail = '') {
@@ -69,26 +62,44 @@ function writeYaml(apiUrl: unknown, extra = '', tail = '') {
   )
 }
 
-function writeSchema(...extra: string[]) {
-  writeFileSync(schemaPath, [...PUBLIC_SCHEMA, ...extra, ''].join('\n'))
+function writeConfig({
+  schemas = [SERVER_SCHEMA],
+  options = [],
+  top = [],
+}: {
+  schemas?: string[]
+  options?: string[]
+  top?: string[]
+} = {}) {
+  writeFileSync(
+    configPath,
+    [
+      "import { defineConfigKit } from '@yoshintame/config-kit'",
+      "import { z } from 'zod'",
+      ...top,
+      'const publicSchema = z.object({ backend: z.object({ apiUrl: z.url() }) })',
+      'export default defineConfigKit({',
+      `  schemas: { public: publicSchema, ${schemas.join(', ')} },`,
+      ...options.map((option) => `  ${option},`),
+      '})',
+      '',
+    ].join('\n'),
+  )
 }
 
 function writeMain(...lines: string[]) {
   writeFileSync(join(root, 'src/main.ts'), `${lines.join('\n')}\n`)
 }
 
-function plugin(options: Partial<ConfigKitOptions> = {}) {
-  return configKit({ schemaModule: 'src/schema.ts', dts: false, ...options })
-}
-
-async function startDev(options: Partial<ConfigKitOptions> = {}) {
+async function startDev(plugins: Plugin[] = []) {
   server = await createServer({
     root,
     configFile: false,
     resolve: sourceResolve,
     logLevel: 'silent',
     server: { middlewareMode: true, ws: false, watch: null },
-    plugins: [plugin(options)],
+    optimizeDeps: { noDiscovery: true },
+    plugins: [configKit(), ...plugins],
   })
   return server
 }
@@ -97,8 +108,10 @@ async function loadModule(dev: ViteDevServer, id: string) {
   return (await dev.ssrLoadModule(id)) as ConfigModule
 }
 
-async function loadSource(dev: ViteDevServer, id: string) {
-  return (await loadModule(dev, id)).source.loadSync()
+async function publicConfig(dev: ViteDevServer) {
+  return {
+    ...((await loadModule(dev, 'virtual:config-kit')).publicConfig as object),
+  }
 }
 
 async function changeFile(
@@ -113,14 +126,14 @@ async function changeFile(
   await new Promise((resolve) => setTimeout(resolve, 20))
 }
 
-async function runBuild(options: Partial<ConfigKitOptions> = {}) {
+async function runBuild(plugins: Plugin[] = []) {
   await build({
     root,
     configFile: false,
     resolve: sourceResolve,
     logLevel: 'silent',
     build: { minify: false },
-    plugins: [plugin(options)],
+    plugins: [configKit(), ...plugins],
   })
   const dist = join(root, 'dist')
   const assets = join(dist, 'assets')
@@ -135,7 +148,7 @@ beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'vite-plugin-config-')))
   symlinkSync(join(repoDir, 'node_modules'), join(root, 'node_modules'))
   yamlPath = join(root, 'config.yaml')
-  schemaPath = join(root, 'src/schema.ts')
+  configPath = join(root, 'config-kit.config.ts')
   mkdirSync(join(root, 'src'))
   writeFileSync(
     join(root, 'index.html'),
@@ -145,7 +158,7 @@ beforeEach(() => {
     "import { publicConfig } from 'virtual:config-kit'",
     'console.log(publicConfig.backend.apiUrl)',
   )
-  writeSchema()
+  writeConfig()
   writeYaml('https://api.local')
   delete process.env.APP_PUBLIC_CONFIG
   delete process.env.APP_PRIVATE_CONFIG
@@ -161,49 +174,55 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true })
 })
 
-describe('schema module', () => {
-  test('fails without a publicSchema export', async () => {
-    writeFileSync(schemaPath, 'export const other = 1\n')
-    await expect(startDev()).rejects.toThrow(/must export 'publicSchema'/)
-  })
-
-  test('fails on a non-schema export', async () => {
-    writeSchema('export const buildSchema = {}')
+describe('config file', () => {
+  test('fails without the config file', async () => {
+    rmSync(configPath)
     await expect(startDev()).rejects.toThrow(
-      /export 'buildSchema' is not a Zod schema/,
+      /config-kit\.config\.ts not found\. Create it with defineConfigKit/,
     )
   })
 
-  test('writes typings for the virtual modules', async () => {
-    writeSchema(BUILD_SCHEMA)
-    await startDev({ dts: 'src/types/config-kit.d.ts' })
-    const dts = readFileSync(join(root, 'src/types/config-kit.d.ts'), 'utf-8')
-    expect(dts).toContain(
-      "export const publicConfig: import('zod').z.output<typeof import('../schema')['publicSchema']>",
+  test('fails without a default export', async () => {
+    writeFileSync(configPath, 'export const other = 1\n')
+    await expect(startDev()).rejects.toThrow(
+      /must default-export defineConfigKit\(\{ schemas \}\)/,
     )
-    expect(dts).toContain(
-      "export const serverConfig: import('zod').z.output<typeof import('../schema')['publicSchema']>",
-    )
-    expect(dts).toContain("declare module 'virtual:config-kit/build'")
   })
 
-  test('leaves up-to-date typings untouched', async () => {
-    await startDev({ dts: 'src/config-kit.d.ts' })
-    await server?.close()
-    const dts = join(root, 'src/config-kit.d.ts')
-    const past = new Date('2020-01-01')
-    utimesSync(dts, past, past)
-
-    await startDev({ dts: 'src/config-kit.d.ts' })
-
-    expect(statSync(dts).mtime).toEqual(past)
+  test('fails on a non-schema section', async () => {
+    writeConfig({ schemas: ['build: {}'] })
+    await expect(startDev()).rejects.toThrow(
+      /schemas\.build is not a Standard Schema/,
+    )
   })
 
-  test('schema change restarts the server', async () => {
+  test('configFile points at another path', async () => {
+    const other = join(root, 'config/app.config.ts')
+    mkdirSync(join(root, 'config'))
+    writeFileSync(other, readFileSync(configPath, 'utf-8'))
+    rmSync(configPath)
+    server = await createServer({
+      root,
+      configFile: false,
+      resolve: sourceResolve,
+      logLevel: 'silent',
+      server: { middlewareMode: true, ws: false, watch: null },
+      plugins: [configKit({ configFile: 'config/app.config.ts' })],
+    })
+    expect(await publicConfig(server)).toEqual({
+      backend: { apiUrl: 'https://api.local' },
+    })
+  })
+
+  test('change restarts the server', async () => {
     const dev = await startDev()
     const restart = vi.spyOn(dev, 'restart').mockResolvedValue()
 
-    await changeFile(dev, () => writeSchema('// changed'), schemaPath)
+    await changeFile(
+      dev,
+      () => writeConfig({ top: ['// changed'] }),
+      configPath,
+    )
 
     expect(restart).toHaveBeenCalledOnce()
   })
@@ -212,24 +231,18 @@ describe('schema module', () => {
 describe('dev', () => {
   test('public module exposes the validated public section', async () => {
     const dev = await startDev()
-    const mod = await loadModule(dev, 'virtual:config-kit')
-    expect(mod.source.loadSync()).toEqual({
-      backend: { apiUrl: 'https://api.local' },
-    })
-    expect({ ...(mod.publicConfig as object) }).toEqual({
+    expect(await publicConfig(dev)).toEqual({
       backend: { apiUrl: 'https://api.local' },
     })
   })
 
   test('private module merges public and private sections', async () => {
-    writeSchema(SERVER_SCHEMA)
     const dev = await startDev()
     const mod = await loadModule(dev, 'virtual:config-kit/private')
-    expect(mod.source.loadSync()).toEqual({
+    expect(mod.serverConfig).toEqual({
       backend: { apiUrl: 'https://api.local' },
-      db: { url: 'postgres://local' },
+      db: { url: 'POSTGRES://LOCAL' },
     })
-    expect(mod.serverConfig).toMatchObject({ db: { url: 'POSTGRES://LOCAL' } })
   })
 
   test('env var wins over yaml', async () => {
@@ -237,33 +250,54 @@ describe('dev', () => {
       backend: { apiUrl: 'https://api.env' },
     })
     const dev = await startDev()
-    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
+    expect(await publicConfig(dev)).toEqual({
       backend: { apiUrl: 'https://api.env' },
     })
+  })
+
+  test('an empty env var is a value, not a fallback to yaml', async () => {
+    process.env.APP_PUBLIC_CONFIG = ''
+    await expect(startDev()).rejects.toThrow(
+      /Failed to parse env APP_PUBLIC_CONFIG/,
+    )
   })
 
   test('fails to start on invalid runtime config', async () => {
     writeYaml('not-a-url')
     await expect(startDev()).rejects.toThrow(
-      /Config validation failed for schema 'public' \(loaded from merge of \[file .*config\.yaml, file .*config\.local\.yaml\] \(public\)\)/,
+      /Config validation failed for 'public' \(loaded from merge of \[file .*config\.yaml, file .*config\.local\.yaml\] \(public\)\)/,
     )
+  })
+
+  test('fails to start on unknown keys', async () => {
+    writeYaml('https://api.local', '  typo: 1\n')
+    await expect(startDev()).rejects.toThrow(
+      /Unknown top-level config keys for 'public' .*: typo/,
+    )
+  })
+
+  test('unknownKeys: warn starts with a warning', async () => {
+    writeConfig({ options: ["unknownKeys: 'warn'"] })
+    writeYaml('https://api.local', '  typo: 1\n')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    await startDev()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(': typo'))
   })
 
   test('private env var wins over yaml private section', async () => {
     process.env.APP_PRIVATE_CONFIG = JSON.stringify({ db: { url: 'from-env' } })
     const dev = await startDev()
-    expect(await loadSource(dev, 'virtual:config-kit/private')).toEqual({
-      backend: { apiUrl: 'https://api.local' },
-      db: { url: 'from-env' },
-    })
+    expect(
+      (await loadModule(dev, 'virtual:config-kit/private')).serverConfig,
+    ).toMatchObject({ db: { url: 'FROM-ENV' } })
   })
 
   test('fails to start on invalid server config', async () => {
-    writeSchema(
-      "export const serverSchema = z.object({ db: z.object({ url: z.number() }) }).meta({ title: 'server' })",
-    )
+    writeConfig({
+      schemas: ['server: z.object({ db: z.object({ url: z.number() }) })'],
+    })
     await expect(startDev()).rejects.toThrow(
-      /Config validation failed for schema 'server'/,
+      /Config validation failed for 'server'/,
     )
   })
 
@@ -273,23 +307,24 @@ describe('dev', () => {
   })
 
   test('runs from env var alone without config.yaml', async () => {
+    writeConfig({ schemas: [] })
     rmSync(yamlPath)
     process.env.APP_PUBLIC_CONFIG = JSON.stringify({
       backend: { apiUrl: 'https://api.env' },
     })
     const dev = await startDev()
-    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
+    expect(await publicConfig(dev)).toEqual({
       backend: { apiUrl: 'https://api.env' },
     })
   })
 
-  test('client code resolves the public module and the schema module', async () => {
+  test('client code resolves the public module and the config file', async () => {
     const dev = await startDev()
     expect((await dev.transformRequest('/src/main.ts'))?.code).toContain(
       'config-kit:public',
     )
     expect((await dev.transformRequest('virtual:config-kit'))?.code).toContain(
-      '/src/schema.ts',
+      '/config-kit.config.ts',
     )
   })
 
@@ -304,12 +339,27 @@ describe('dev', () => {
     expect(result?.code).toContain('/src/value.ts')
   })
 
+  test('client copy of the config file keeps only the public schema and onInvalid', async () => {
+    writeConfig({
+      schemas: [SERVER_SCHEMA, BUILD_SCHEMA],
+      options: [
+        "onInvalid() { console.log('ON_INVALID') }",
+        "dev: { serverRestart: ['DEV_OPTION'] }",
+      ],
+    })
+    const dev = await startDev()
+    const code = (await dev.transformRequest('/config-kit.config.ts'))?.code
+    expect(code).toContain('ON_INVALID')
+    expect(code).not.toContain('DEV_OPTION')
+    expect(code).not.toContain('server:')
+  })
+
   test('watches config.yaml found above the root', async () => {
     const appRoot = join(root, 'app')
     mkdirSync(join(appRoot, 'src'), { recursive: true })
     writeFileSync(
-      join(appRoot, 'src/schema.ts'),
-      readFileSync(schemaPath, 'utf-8'),
+      join(appRoot, 'config-kit.config.ts'),
+      readFileSync(configPath, 'utf-8'),
     )
     server = await createServer({
       root: appRoot,
@@ -317,7 +367,7 @@ describe('dev', () => {
       resolve: sourceResolve,
       logLevel: 'silent',
       server: { middlewareMode: true, ws: false },
-      plugins: [plugin()],
+      plugins: [configKit()],
     })
     expect(server.watcher.getWatched()[root]).toContain('config.yaml')
   })
@@ -334,7 +384,7 @@ describe('dev', () => {
   test('private module is rejected in client code', async () => {
     writeFileSync(
       join(root, 'src/leak.ts'),
-      "export { source } from 'virtual:config-kit/private'\n",
+      "export { serverConfig } from 'virtual:config-kit/private'\n",
     )
     const dev = await startDev()
     await expect(dev.transformRequest('/src/leak.ts')).rejects.toThrow(
@@ -350,15 +400,14 @@ describe('local yaml', () => {
       'public:\n  backend:\n    apiUrl: https://api.mine\n',
     )
     const dev = await startDev()
-    expect(await loadSource(dev, 'virtual:config-kit/private')).toEqual({
+    expect(await publicConfig(dev)).toEqual({
       backend: { apiUrl: 'https://api.mine' },
-      db: { url: 'postgres://local' },
     })
   })
 
   test('creating it at runtime reloads config', async () => {
     const dev = await startDev()
-    await loadSource(dev, 'virtual:config-kit')
+    await publicConfig(dev)
     const localPath = join(root, 'config.local.yaml')
 
     await changeFile(
@@ -372,7 +421,7 @@ describe('local yaml', () => {
       'add',
     )
 
-    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
+    expect(await publicConfig(dev)).toEqual({
       backend: { apiUrl: 'https://api.mine' },
     })
   })
@@ -384,18 +433,18 @@ describe('local yaml', () => {
       'public:\n  backend:\n    apiUrl: https://api.mine\n',
     )
     const dev = await startDev()
-    await loadSource(dev, 'virtual:config-kit')
+    await publicConfig(dev)
 
     await changeFile(dev, () => rmSync(localPath), localPath, 'unlink')
 
-    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
+    expect(await publicConfig(dev)).toEqual({
       backend: { apiUrl: 'https://api.local' },
     })
   })
 })
 
 describe('build section', () => {
-  beforeEach(() => writeSchema(BUILD_SCHEMA))
+  beforeEach(() => writeConfig({ schemas: [SERVER_SCHEMA, BUILD_SCHEMA] }))
 
   test('feeds the build module in dev', async () => {
     writeYaml('https://api.local', '', 'build:\n  actAs: e2e-super\n')
@@ -417,15 +466,15 @@ describe('build section', () => {
     expect(restart).toHaveBeenCalledOnce()
   })
 
-  test('build module needs a buildSchema export', async () => {
-    writeSchema()
+  test('build module needs schemas.build', async () => {
+    writeConfig()
     writeFileSync(
       join(root, 'src/flags.ts'),
       "export { buildConfig } from 'virtual:config-kit/build'\n",
     )
     const dev = await startDev()
     await expect(dev.transformRequest('/src/flags.ts')).rejects.toThrow(
-      /needs a 'buildSchema' export/,
+      /needs schemas\.build in .*config-kit\.config\.ts/,
     )
   })
 
@@ -462,34 +511,112 @@ describe('build section', () => {
   test('fails the build on an invalid build env var', async () => {
     vi.stubEnv('APP_BUILD_CONFIG', JSON.stringify({ devtools: 'maybe' }))
     await expect(runBuild()).rejects.toThrow(
-      /Config validation failed \(loaded from env APP_BUILD_CONFIG\)/,
+      /Config validation failed for 'build' \(loaded from env APP_BUILD_CONFIG\)/,
     )
   })
 })
 
+describe('sensitive', () => {
+  beforeEach(() =>
+    writeConfig({
+      schemas: [SERVER_SCHEMA, BUILD_SCHEMA],
+      options: ["sensitive: ['build.actAs']"],
+    }),
+  )
+
+  test('is allowed in dev', async () => {
+    writeYaml('https://api.local', '', 'build:\n  actAs: e2e-super\n')
+    const dev = await startDev()
+    expect(
+      (await loadModule(dev, 'virtual:config-kit/build')).buildConfig,
+    ).toMatchObject({ actAs: 'e2e-super' })
+  })
+
+  test('fails the build when set', async () => {
+    vi.stubEnv('APP_BUILD_CONFIG', JSON.stringify({ actAs: 'e2e-super' }))
+    await expect(runBuild()).rejects.toThrow(
+      /Sensitive build config is set in env APP_BUILD_CONFIG: build\.actAs/,
+    )
+  })
+
+  test('fails the build when its dev value reaches a chunk', async () => {
+    writeYaml('https://api.local', '', 'build:\n  actAs: e2e-super-token\n')
+    writeMain("console.log('e2e-super-token')")
+    await expect(runBuild()).rejects.toThrow(
+      /Private or sensitive config values found in the bundle: build\.actAs in assets\/index-.*\.js/,
+    )
+  })
+})
+
+describe('leak scan', () => {
+  test('fails the build when a private value reaches a chunk', async () => {
+    writeMain("console.log('postgres://local')")
+    await expect(runBuild()).rejects.toThrow(
+      /found in the bundle: private\.db\.url in assets\/index-.*\.js/,
+    )
+  })
+
+  test('checks private values from the env var', async () => {
+    vi.stubEnv(
+      'APP_PRIVATE_CONFIG',
+      JSON.stringify({ db: { url: 'postgres://from-env' } }),
+    )
+    writeMain("console.log('postgres://from-env')")
+    await expect(runBuild()).rejects.toThrow(/private\.db\.url/)
+  })
+
+  test('skips private values that are also public', async () => {
+    writeYaml('https://api.local', '', 'build:\n  x: 1\n'.replace(/.*/s, ''))
+    writeFileSync(
+      yamlPath,
+      'public:\n  backend:\n    apiUrl: https://api.local\nprivate:\n  db:\n    url: https://api.local\n',
+    )
+    writeMain("console.log('https://api.local')")
+    await expect(runBuild()).resolves.toBeDefined()
+  })
+
+  test('skips short values', async () => {
+    writeFileSync(
+      yamlPath,
+      'public:\n  backend:\n    apiUrl: https://api.local\nprivate:\n  db:\n    url: pg\n',
+    )
+    writeMain("console.log('pg')")
+    await expect(runBuild()).resolves.toBeDefined()
+  })
+})
+
 describe('loadDevConfig', () => {
-  test('returns validated server config', async () => {
-    writeSchema(SERVER_SCHEMA)
-    expect({
-      ...(await loadDevConfig<object>({ schemaModule: 'src/schema.ts', root })),
-    }).toEqual({
+  const definition = defineConfigKit({
+    schemas: {
+      public: z.object({ backend: z.object({ apiUrl: z.url() }) }),
+      server: z.object({
+        backend: z.object({ apiUrl: z.url() }),
+        db: z.object({ url: z.string().transform((url) => url.toUpperCase()) }),
+      }),
+    },
+  })
+
+  test('returns validated server config', () => {
+    const config = loadDevConfig(definition, { root })
+    expect(config).toEqual({
       backend: { apiUrl: 'https://api.local' },
       db: { url: 'POSTGRES://LOCAL' },
     })
+    expect(config.db.url).toBe('POSTGRES://LOCAL')
   })
 
-  test('throws on invalid config', async () => {
+  test('throws on invalid config', () => {
     writeYaml('broken')
-    await expect(
-      loadDevConfig({ schemaModule: 'src/schema.ts', root }),
-    ).rejects.toThrow(/Config validation failed/)
+    expect(() => loadDevConfig(definition, { root })).toThrow(
+      /Config validation failed/,
+    )
   })
 })
 
 describe('watch', () => {
   test('runtime change reloads the page by default', async () => {
     const dev = await startDev()
-    await loadSource(dev, 'virtual:config-kit')
+    await publicConfig(dev)
     const send = vi.spyOn(dev.ws, 'send')
     const reloadModule = vi.spyOn(dev, 'reloadModule')
 
@@ -497,26 +624,28 @@ describe('watch', () => {
 
     expect(send).toHaveBeenCalledWith({ type: 'full-reload' })
     expect(reloadModule).not.toHaveBeenCalled()
-    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
+    expect(await publicConfig(dev)).toEqual({
       backend: { apiUrl: 'https://api.changed' },
     })
   })
 
   test('with hmr runtime change hot-reloads config modules', async () => {
-    const dev = await startDev({ hmr: true })
-    await loadSource(dev, 'virtual:config-kit')
+    writeConfig({ options: ['dev: { hmr: true }'] })
+    const dev = await startDev()
+    await publicConfig(dev)
     const reloadModule = vi.spyOn(dev, 'reloadModule')
 
     await changeFile(dev, () => writeYaml('https://api.changed'))
 
     expect(reloadModule).toHaveBeenCalled()
-    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
+    expect(await publicConfig(dev)).toEqual({
       backend: { apiUrl: 'https://api.changed' },
     })
   })
 
   test('serverRestart paths restart the server', async () => {
-    const dev = await startDev({ serverRestart: ['backend.*'] })
+    writeConfig({ options: ["dev: { serverRestart: ['backend.*'] }"] })
+    const dev = await startDev()
     const restart = vi.spyOn(dev, 'restart').mockResolvedValue()
 
     await changeFile(dev, () => writeYaml('https://api.changed'))
@@ -525,20 +654,22 @@ describe('watch', () => {
   })
 
   test('with hmr fullReload paths trigger a full page reload', async () => {
-    const dev = await startDev({ hmr: true, fullReload: ['app.*'] })
-    await loadSource(dev, 'virtual:config-kit')
+    writeConfig({
+      options: ["dev: { hmr: true, fullReload: ['backend.*'] }"],
+    })
+    const dev = await startDev()
+    await publicConfig(dev)
     const send = vi.spyOn(dev.ws, 'send')
 
-    await changeFile(dev, () =>
-      writeYaml('https://api.local', '  app:\n    theme: dark\n'),
-    )
+    await changeFile(dev, () => writeYaml('https://api.changed'))
 
     expect(send).toHaveBeenCalledWith({ type: 'full-reload' })
   })
 
   test('invalid change reports error and keeps previous config', async () => {
-    const dev = await startDev({ hmr: true })
-    await loadSource(dev, 'virtual:config-kit')
+    writeConfig({ options: ['dev: { hmr: true }'] })
+    const dev = await startDev()
+    await publicConfig(dev)
     const send = vi.spyOn(dev.ws, 'send')
     const reloadModule = vi.spyOn(dev, 'reloadModule')
 
@@ -548,19 +679,19 @@ describe('watch', () => {
       expect.objectContaining({
         type: 'error',
         err: expect.objectContaining({
-          message: expect.stringMatching(/schema 'public'/),
+          message: expect.stringMatching(/for 'public'/),
         }),
       }),
     )
     expect(reloadModule).not.toHaveBeenCalled()
-    expect(await loadSource(dev, 'virtual:config-kit')).toEqual({
+    expect(await publicConfig(dev)).toEqual({
       backend: { apiUrl: 'https://api.local' },
     })
   })
 
   test('ignores changes reported for unrelated files', async () => {
     const dev = await startDev()
-    await loadSource(dev, 'virtual:config-kit')
+    await publicConfig(dev)
     const send = vi.spyOn(dev.ws, 'send')
 
     await changeFile(
@@ -573,8 +704,9 @@ describe('watch', () => {
   })
 
   test('watch: false disables reactions', async () => {
-    const dev = await startDev({ watch: false })
-    await loadSource(dev, 'virtual:config-kit')
+    writeConfig({ options: ['dev: { watch: false }'] })
+    const dev = await startDev()
+    await publicConfig(dev)
     const send = vi.spyOn(dev.ws, 'send')
 
     await changeFile(dev, () => writeYaml('https://api.changed'))
@@ -583,8 +715,9 @@ describe('watch', () => {
   })
 
   test('recovering from an error clears the overlay with an update', async () => {
-    const dev = await startDev({ hmr: true })
-    await loadSource(dev, 'virtual:config-kit')
+    writeConfig({ options: ['dev: { hmr: true }'] })
+    const dev = await startDev()
+    await publicConfig(dev)
     const reloadModule = vi.spyOn(dev, 'reloadModule')
 
     await changeFile(dev, () => writeYaml('broken'))
@@ -605,15 +738,17 @@ describe('watch', () => {
     ).not.toContain('import.meta.hot.accept()')
     await dev.close()
 
-    const hot = await startDev({ hmr: true })
+    writeConfig({ options: ['dev: { hmr: true }'] })
+    const hot = await startDev()
     expect((await hot.transformRequest('virtual:config-kit'))?.code).toContain(
       'import.meta.hot.accept()',
     )
   })
 
   test('unchanged content is a no-op', async () => {
-    const dev = await startDev({ serverRestart: ['backend.*'] })
-    await loadSource(dev, 'virtual:config-kit')
+    writeConfig({ options: ["dev: { serverRestart: ['backend.*'] }"] })
+    const dev = await startDev()
+    await publicConfig(dev)
     const restart = vi.spyOn(dev, 'restart').mockResolvedValue()
     const send = vi.spyOn(dev.ws, 'send')
 
@@ -625,7 +760,7 @@ describe('watch', () => {
 })
 
 describe('build', () => {
-  test('injects the JSON placeholder and reads config from it', async () => {
+  test('injects the JSON placeholder and validates config on import', async () => {
     const { html, js } = await runBuild()
     expect(html).toMatch(
       /<script type="application\/json" id="__CONFIG__">\$\{APP_PUBLIC_CONFIG\}<\/script>/,
@@ -634,8 +769,116 @@ describe('build', () => {
       html.indexOf('type="module"'),
     )
     expect(js).toContain('getElementById')
+    expect(js).toContain('knownKeys: ["backend"]')
     expect(js).not.toContain('api.local')
     expect(existsSync(join(root, 'dist-config'))).toBe(false)
+  })
+
+  test('keeps the server schema, build schema and dev options out of the client bundle', async () => {
+    writeFileSync(
+      join(root, 'src/config-error.ts'),
+      "export function render() { document.body.textContent = 'CUSTOM_SCREEN' }\n",
+    )
+    writeConfig({
+      schemas: [
+        'server: publicSchema.extend({ PRIVATE_FIELD: z.string() })',
+        'build: z.object({ BUILD_FIELD: z.boolean().default(false) })',
+      ],
+      options: [
+        "onInvalid() { void import('./src/config-error').then((m) => m.render()) }",
+        "dev: { serverRestart: ['DEV_OPTION'] }",
+      ],
+    })
+    writeYaml('https://api.local', '', '')
+    writeFileSync(
+      yamlPath,
+      'public:\n  backend:\n    apiUrl: https://api.local\nprivate:\n  PRIVATE_FIELD: x\n',
+    )
+    const { js } = await runBuild()
+    expect(js).not.toContain('PRIVATE_FIELD')
+    expect(js).not.toContain('BUILD_FIELD')
+    expect(js).not.toContain('DEV_OPTION')
+    expect(js).toContain('CUSTOM_SCREEN')
+  })
+
+  test('fails when a plugin drops the placeholder from index.html', async () => {
+    const stripper: Plugin = {
+      name: 'strip',
+      transformIndexHtml: {
+        order: 'post',
+        handler: (html) => html.replace(/\$\{APP_PUBLIC_CONFIG\}/, ''),
+      },
+    }
+    await expect(runBuild([stripper])).rejects.toThrow(
+      /index\.html lost the \$\{APP_PUBLIC_CONFIG\} placeholder/,
+    )
+  })
+})
+
+describe.each([
+  [
+    'valibot',
+    [
+      "import * as v from 'valibot'",
+      "import { toStandardJsonSchema } from '@valibot/to-json-schema'",
+      'export default {',
+      '  schemas: {',
+      '    public: toStandardJsonSchema(v.object({ backend: v.object({ apiUrl: v.pipe(v.string(), v.url()) }) })),',
+      '    build: toStandardJsonSchema(v.object({ msw: v.optional(v.boolean(), false), token: v.optional(v.string()) })),',
+      '  },',
+      '}',
+    ],
+  ],
+  [
+    'arktype',
+    [
+      "import { type } from 'arktype'",
+      'export default {',
+      '  schemas: {',
+      "    public: type({ backend: { apiUrl: 'string.url' } }),",
+      "    build: type({ msw: 'boolean = false', 'token?': 'string' }),",
+      '  },',
+      '}',
+    ],
+  ],
+])('%s schemas', (_, lines) => {
+  beforeEach(() => {
+    writeFileSync(configPath, `${lines.join('\n')}\n`)
+    writeFileSync(
+      yamlPath,
+      'public:\n  backend:\n    apiUrl: https://api.local\n',
+    )
+  })
+
+  test('validate dev config', async () => {
+    const dev = await startDev()
+    expect(await publicConfig(dev)).toEqual({
+      backend: { apiUrl: 'https://api.local' },
+    })
+    expect(
+      (await loadModule(dev, 'virtual:config-kit/build')).buildConfig,
+    ).toEqual({ msw: false })
+  })
+
+  test('reject invalid and unknown keys', async () => {
+    writeFileSync(
+      yamlPath,
+      'public:\n  backend:\n    apiUrl: https://api.local\n  typo: 1\n',
+    )
+    await expect(startDev()).rejects.toThrow(/Unknown top-level config keys/)
+    writeFileSync(yamlPath, 'public:\n  backend:\n    apiUrl: not a url\n')
+    await expect(startDev()).rejects.toThrow(
+      /Config validation failed for 'public'[\s\S]*→ at backend\.apiUrl/,
+    )
+  })
+
+  test('spell out optional build fields', async () => {
+    writeMain(
+      "import { buildConfig } from 'virtual:config-kit/build'",
+      "if (buildConfig.token) console.log('TOKEN_ON')",
+    )
+    const { js } = await runBuild()
+    expect(js).not.toContain('TOKEN_ON')
   })
 })
 
@@ -652,9 +895,15 @@ describe('docker', () => {
     )
   }
 
-  test('builds a self-contained validator', async () => {
-    await runBuild({ docker: true })
+  test('builds a self-contained validator without onInvalid', async () => {
+    writeConfig({
+      options: ['docker: true', "onInvalid() { console.log('ON_INVALID') }"],
+    })
+    await runBuild()
     rmSync(join(root, 'node_modules'))
+    expect(
+      readFileSync(join(root, 'dist-config', VALIDATOR_FILE), 'utf-8'),
+    ).not.toContain('ON_INVALID')
 
     const valid = validate({
       APP_PUBLIC_CONFIG: JSON.stringify({ backend: { apiUrl: 'https://a' } }),
@@ -667,7 +916,7 @@ describe('docker', () => {
     })
     expect(invalid.status).toBe(1)
     expect(invalid.stderr).toMatch(
-      /Config validation failed for schema 'public' \(loaded from env APP_PUBLIC_CONFIG\)/,
+      /Config validation failed for 'public' \(loaded from env APP_PUBLIC_CONFIG\)/,
     )
 
     const unknown = validate({
@@ -687,7 +936,8 @@ describe('docker', () => {
   test.skipIf(spawnSync('envsubst', ['--version']).status !== 0)(
     'entrypoint hook renders index.html on every start',
     async () => {
-      await runBuild({ docker: true })
+      writeConfig({ options: ['docker: true'] })
+      await runBuild()
       const nginx = join(root, 'nginx')
       const docroot = join(nginx, 'html')
       mkdirSync(docroot, { recursive: true })
@@ -726,20 +976,26 @@ describe('docker', () => {
 })
 
 describe('ssr build', () => {
-  test('virtual modules read env at runtime', async () => {
+  test('virtual modules validate env on import', async () => {
     writeFileSync(
-      schemaPath,
+      configPath,
       [
         "import { z } from 'zod'",
-        'export const publicSchema = z.looseObject({})',
+        'export default {',
+        '  schemas: {',
+        '    public: z.looseObject({ a: z.number() }),',
+        '    server: z.looseObject({ db: z.looseObject({ password: z.string() }) }),',
+        '  },',
+        '  docker: true,',
+        '}',
         '',
       ].join('\n'),
     )
     writeFileSync(
       join(root, 'src/server.ts'),
       [
-        "export { source as publicSource } from 'virtual:config-kit'",
-        "export { source as privateSource, serverConfig } from 'virtual:config-kit/private'",
+        "export { publicConfig } from 'virtual:config-kit'",
+        "export { serverConfig } from 'virtual:config-kit/private'",
       ].join('\n'),
     )
     await build({
@@ -752,31 +1008,22 @@ describe('ssr build', () => {
         outDir: 'dist-ssr',
         rollupOptions: { output: { entryFileNames: 'server.mjs' } },
       },
-      plugins: [plugin({ docker: true })],
+      plugins: [configKit()],
     })
     expect(existsSync(join(root, 'dist-config'))).toBe(false)
-    const mod = (await import(
-      pathToFileURL(join(root, 'dist-ssr/server.mjs')).href
-    )) as {
-      publicSource: ConfigModule['source']
-      privateSource: ConfigModule['source']
-      serverConfig: unknown
-    }
+    const url = pathToFileURL(join(root, 'dist-ssr/server.mjs')).href
 
-    expect(mod.publicSource.loadSync()).toBeUndefined()
-    expect(mod.privateSource.loadSync()).toBeUndefined()
+    await expect(import(`${url}?missing`)).rejects.toThrow(
+      'APP_PUBLIC_CONFIG is not set',
+    )
 
     process.env.APP_PUBLIC_CONFIG = JSON.stringify({ a: 1, db: { host: 'h' } })
     process.env.APP_PRIVATE_CONFIG = JSON.stringify({ db: { password: 'p' } })
-    expect(mod.publicSource.loadSync()).toEqual({ a: 1, db: { host: 'h' } })
-    expect(mod.publicSource.describe()).toBe('env APP_PUBLIC_CONFIG')
-    expect(mod.privateSource.loadSync()).toEqual({
+    const mod = (await import(`${url}?set`)) as ConfigModule
+    expect(mod.publicConfig).toEqual({ a: 1, db: { host: 'h' } })
+    expect(mod.serverConfig).toEqual({
       a: 1,
       db: { host: 'h', password: 'p' },
     })
-    expect(mod.privateSource.describe()).toBe(
-      'merge of [env APP_PUBLIC_CONFIG, env APP_PRIVATE_CONFIG]',
-    )
-    expect(mod.serverConfig).toMatchObject({ db: { password: 'p' } })
   })
 })

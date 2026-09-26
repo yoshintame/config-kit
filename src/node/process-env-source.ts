@@ -19,7 +19,7 @@ export function createProcessEnvSource({
   return {
     loadSync() {
       const value = process.env[envVar]
-      if (!value) return undefined
+      if (value === undefined) return undefined
       return parseWith(parser, value, origin)
     },
     describe: () => origin,

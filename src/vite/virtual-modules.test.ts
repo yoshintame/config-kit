@@ -1,12 +1,10 @@
 import { describe, expect, test, vi } from 'vitest'
 import z from 'zod'
 
-import {
-  createInMemorySource,
-  createSyncConfigLoader,
-  type InMemorySource,
-  type SyncConfigLoader,
-} from '../core'
+import { resolvePublicConfig } from '../browser'
+import { liveView, parseOrThrow } from '../core'
+import { jsonSchemaOf } from '../core/standard-schema'
+import { resolveSettings } from './config-file'
 import {
   buildConfigModule,
   buildModule,
@@ -19,123 +17,116 @@ interface HotStub {
   accept: () => void
 }
 
-interface DevExports {
-  source: InMemorySource
-  loader: SyncConfigLoader
-  publicConfig: { a: number }
+const definition = {
+  schemas: {
+    public: z.object({ a: z.number(), flag: z.boolean().default(false) }),
+    server: z.object({
+      a: z.number(),
+      url: z.string().transform((url) => url.toUpperCase()),
+    }),
+  },
 }
+const settings = resolveSettings(definition)
+const target = { configFile: '/app/config-kit.config.ts', settings }
 
-const schema = z.object({ a: z.number() })
-const target = {
-  kind: 'public' as const,
-  schemaFile: '/app/src/schema.ts',
-  schemaExport: 'publicSchema',
-}
-
-function runDevModule(code: string, hot: HotStub | undefined): DevExports {
+function runModule(code: string, hot?: HotStub): Record<string, unknown> {
+  const exported = [...code.matchAll(/^export const (\w+)/gm)].map(
+    (match) => match[1],
+  )
   const body = code
     .replace(/^import .*$/gm, '')
     .replaceAll('import.meta.hot', 'hot')
     .replaceAll('export const', 'const')
   return new Function(
-    'createInMemorySource',
-    'createSyncConfigLoader',
-    'schema',
+    'config',
+    'resolvePublicConfig',
+    'parseOrThrow',
+    'liveView',
     'hot',
-    `${body}\nreturn { source, loader, publicConfig }`,
-  )(createInMemorySource, createSyncConfigLoader, schema, hot)
+    `${body}\nreturn { ${exported.join(', ')} }`,
+  )(definition, resolvePublicConfig, parseOrThrow, liveView, hot)
 }
 
 describe('devModule', () => {
-  test('imports the schema export from the schema module', () => {
+  test('imports the config file and validates the public section', () => {
     const code = devModule({
       ...target,
-      loaded: { raw: {}, origin: 'yaml' },
+      kind: 'public',
+      loaded: { raw: { a: 1 }, origin: 'yaml' },
       hmr: false,
     })
-    expect(code).toContain(
-      'import { publicSchema as schema } from "/app/src/schema.ts"',
-    )
+    expect(code).toContain('import config from "/app/config-kit.config.ts"')
     expect(code).not.toContain('import.meta.hot')
+    expect(runModule(code).publicConfig).toEqual({ a: 1, flag: false })
   })
 
-  test('exposes a validated config over the yaml value', () => {
-    const { publicConfig, source } = runDevModule(
-      devModule({
-        ...target,
-        loaded: { raw: { a: 1 }, origin: 'file x' },
-        hmr: false,
-      }),
-      undefined,
-    )
-    expect(publicConfig.a).toBe(1)
-    expect(source.describe()).toBe('file x')
+  test('validates the server section with the server schema', () => {
+    const code = devModule({
+      ...target,
+      kind: 'server',
+      loaded: { raw: { a: 1, url: 'x' }, origin: 'yaml' },
+      hmr: false,
+    })
+    expect(runModule(code).serverConfig).toEqual({ a: 1, url: 'X' })
   })
 
-  test('with hmr keeps one loader across updates and pushes the new value', () => {
+  test('with hmr keeps one live view across updates', () => {
     const hot: HotStub = { data: {}, accept: vi.fn() }
-    const first = runDevModule(
+    const first = runModule(
       devModule({
         ...target,
-        loaded: { raw: { a: 1 }, origin: 'y' },
+        kind: 'public',
+        loaded: { raw: { a: 1 }, origin: 'yaml' },
+        hmr: true,
+      }),
+      hot,
+    ).publicConfig as { a: number }
+    runModule(
+      devModule({
+        ...target,
+        kind: 'public',
+        loaded: { raw: { a: 2 }, origin: 'yaml' },
         hmr: true,
       }),
       hot,
     )
-    const onChange = vi.fn()
-    first.loader.onChange(onChange)
-    expect(first.publicConfig.a).toBe(1)
-
-    const second = runDevModule(
-      devModule({
-        ...target,
-        loaded: { raw: { a: 2 }, origin: 'y' },
-        hmr: true,
-      }),
-      hot,
-    )
-
-    expect(second.loader).toBe(first.loader)
-    expect(first.publicConfig.a).toBe(2)
-    expect(onChange).toHaveBeenCalledOnce()
+    expect(first.a).toBe(2)
     expect(hot.accept).toHaveBeenCalledTimes(2)
   })
 })
 
 describe('buildModule', () => {
-  const names = {
-    elementId: 'cfg',
-    publicEnvVar: 'PUB',
-    privateEnvVar: 'PRIV',
-  }
-
   test('client public module reads the JSON script', () => {
-    const code = buildModule({ ...target, ssr: false, ...names })
-    expect(code).toContain('createJsonScriptSource({ elementId: "cfg" })')
+    const code = buildModule({ ...target, kind: 'public', ssr: false })
     expect(code).toContain(
-      'export const publicConfig = loader.defineConfig(schema)',
+      'read: () => readConfigScript("__CONFIG__", "APP_PUBLIC_CONFIG")',
     )
+    expect(code).toContain('knownKeys: ["a","flag"], unknownKeys: "strict"')
   })
 
   test('ssr public module reads the public env var', () => {
-    expect(buildModule({ ...target, ssr: true, ...names })).toContain(
-      'createProcessEnvSource({ envVar: "PUB" })',
+    const code = buildModule({ ...target, kind: 'public', ssr: true })
+    expect(code).toContain(
+      'resolveEnvConfig({ schema: config.schemas.public, name: "public", envVar: "APP_PUBLIC_CONFIG"',
     )
   })
 
-  test('server module merges both env vars', () => {
+  test('server module layers the private env var over the public one', () => {
+    const code = buildModule({ ...target, kind: 'server', ssr: true })
+    expect(code).toContain(
+      'envVar: "APP_PUBLIC_CONFIG", overlayEnvVar: "APP_PRIVATE_CONFIG"',
+    )
+    expect(code).toContain('export const serverConfig')
+  })
+
+  test('omits key checks when unknown keys are ignored', () => {
     const code = buildModule({
       ...target,
-      kind: 'server',
-      schemaExport: 'serverSchema',
-      ssr: true,
-      ...names,
+      settings: resolveSettings({ ...definition, unknownKeys: 'ignore' }),
+      kind: 'public',
+      ssr: false,
     })
-    expect(code).toContain(
-      'mergeAll([createProcessEnvSource({ envVar: "PUB" }), createProcessEnvSource({ envVar: "PRIV" })])',
-    )
-    expect(code).toContain('import { serverSchema as schema }')
-    expect(code).toContain('export const serverConfig')
+    expect(code).not.toContain('knownKeys')
   })
 })
 
@@ -152,14 +143,20 @@ describe('buildConfigModule', () => {
       token: z.string().optional(),
       nested: z.object({ actAs: z.string().optional() }).prefault({}),
     })
-    expect(buildConfigModule({ msw: true, nested: {} }, schema)).toBe(
+    expect(
+      buildConfigModule(
+        { msw: true, nested: {} },
+        jsonSchemaOf(schema, 'output'),
+      ),
+    ).toBe(
       'export const buildConfig = {"msw":true,"nested":{"actAs":undefined},"token":undefined}',
     )
   })
 })
 
 test('validatorModule checks the public env var', () => {
-  const code = validatorModule({ schemaFile: '/s.ts', envVar: 'PUB' })
-  expect(code).toContain('const envVar = "PUB"')
-  expect(code).toContain('loader.assertOnlyKnownTopKeys()')
+  const code = validatorModule(target)
+  expect(code).toContain('envVar: "APP_PUBLIC_CONFIG"')
+  expect(code).toContain('knownKeys: ["a","flag"]')
+  expect(code).toContain('process.exit(1)')
 })

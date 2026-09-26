@@ -1,7 +1,7 @@
 {
   "name": "@yoshintame/config-kit",
   "version": "0.2.0",
-  "description": "Lazy, Zod-validated configuration with pluggable sources and a Vite plugin for runtime config injection",
+  "description": "Lazy, Standard Schema-validated configuration with pluggable sources and a Vite plugin for runtime config injection",
   "license": "MIT",
   "author": "Mikhail Ivanov <m.ivanov0427@gmail.com>",
   "repository": {
@@ -11,7 +11,10 @@
   "keywords": [
     "config",
     "configuration",
+    "standard-schema",
     "zod",
+    "valibot",
+    "arktype",
     "vite",
     "vite-plugin",
     "runtime-config",
@@ -44,6 +47,9 @@
       "types": "./dist/vite/index.d.ts",
       "default": "./dist/vite/index.js"
     },
+    "./client": {
+      "types": "./dist/client.d.ts"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -53,9 +59,9 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/add-client-types.mjs",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p test/types",
     "check": "biome check --write",
     "lint:package": "publint --strict && attw --pack . --profile esm-only",
     "test:mutation": "stryker run",
@@ -65,14 +71,15 @@
     "prepare": "husky"
   },
   "dependencies": {
+    "@standard-schema/spec": "^1.1.0",
     "es-toolkit": "^1.52.0",
     "find-up": "^7.0.0",
+    "magic-string": "^0.30.21",
     "ts-pattern": "^5.9.0",
     "yaml": "^2.8.0"
   },
   "peerDependencies": {
-    "vite": "^6.1.0 || ^7.0.0",
-    "zod": "^4.0.0"
+    "vite": "^6.1.0 || ^7.0.0"
   },
   "peerDependenciesMeta": {
     "vite": {
@@ -90,13 +97,16 @@
     "@stryker-mutator/typescript-checker": "^10.0.0",
     "@stryker-mutator/vitest-runner": "^10.0.0",
     "@types/node": "^22.15.32",
+    "@valibot/to-json-schema": "^1.8.0",
     "@yoshintame/biome-config": "^1.0.0",
+    "arktype": "^2.2.5",
     "husky": "^9.1.7",
     "lint-staged": "^16.1.5",
     "publint": "^0.3.12",
     "semantic-release": "^25.0.9",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
+    "valibot": "^1.5.0",
     "vite": "^6.3.6",
     "vitest": "^3.2.4",
     "zod": "^4.3.6"
