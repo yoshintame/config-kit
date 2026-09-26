@@ -1,6 +1,6 @@
 {
   "name": "@yoshintame/config-kit",
-  "version": "0.0.0-development",
+  "version": "0.1.0",
   "description": "Lazy, Zod-validated configuration with pluggable sources and a Vite plugin for runtime config injection",
   "license": "MIT",
   "author": "Mikhail Ivanov <m.ivanov0427@gmail.com>",
