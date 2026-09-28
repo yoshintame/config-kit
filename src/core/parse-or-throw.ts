@@ -1,6 +1,9 @@
-import { isPlainObject } from 'es-toolkit'
+import { isPlainObject, once } from 'es-toolkit'
+import { match } from 'ts-pattern'
 
-import { ConfigKitError } from './errors'
+import { ConfigErrorKind, ConfigKitError } from './errors'
+import { toEnum } from './guards'
+import type { RawConfig } from './source'
 import {
   formatIssues,
   type StandardSchemaV1,
@@ -8,53 +11,60 @@ import {
   validateSync,
 } from './standard-schema'
 
-export type UnknownKeys = 'strict' | 'warn' | 'ignore'
+export enum UnknownKeys {
+  Strict = 'strict',
+  Warn = 'warn',
+  Ignore = 'ignore',
+}
 
 export interface ParseOptions {
   name?: string
   knownKeys?: readonly string[]
-  unknownKeys?: UnknownKeys
+  unknownKeys?: `${UnknownKeys}`
   warn?: (message: string) => void
 }
 
 export function parseOrThrow<S extends StandardSchemaV1>(
   schema: S,
-  raw: unknown,
-  origin: string,
+  { raw, source }: RawConfig,
   {
     name,
     knownKeys,
-    unknownKeys = 'ignore',
+    unknownKeys = UnknownKeys.Ignore,
     warn = console.warn,
   }: ParseOptions = {},
 ): StandardSchemaV1.InferOutput<S> {
-  const section = () => name ?? schemaTitle(schema)
-  const forSection = () => {
-    const resolved = section()
-    return resolved ? ` for '${resolved}'` : ''
+  const section = once(() => name ?? schemaTitle(schema))
+  const target = () => (section() ? ` for '${section()}'` : '')
+  const fail = (message: string): never => {
+    throw new ConfigKitError(message, {
+      kind: ConfigErrorKind.Schema,
+      section: section(),
+      source,
+    })
   }
-  const result = validateSync(schema, raw, () => `Config${forSection()}`)
+
+  const result = validateSync(schema, raw, () => `Config${target()}`)
   if (result.issues) {
-    throw new ConfigKitError(
-      `Config validation failed${forSection()} (loaded from ${origin}):\n${formatIssues(result.issues)}`,
-      { kind: 'schema', section: section(), source: origin },
+    return fail(
+      `Config validation failed${target()} (loaded from ${source}):\n${formatIssues(result.issues)}`,
     )
   }
-  if (knownKeys && unknownKeys !== 'ignore') {
-    const unknown = isPlainObject(raw)
-      ? Object.keys(raw).filter((key) => !knownKeys.includes(key))
-      : []
-    if (unknown.length > 0) {
-      const message = `Unknown top-level config keys${forSection()} (loaded from ${origin}): ${unknown.join(', ')}`
-      if (unknownKeys === 'warn') warn(message)
-      else {
-        throw new ConfigKitError(message, {
-          kind: 'schema',
-          section: section(),
-          source: origin,
-        })
-      }
-    }
+
+  const unknown = knownKeys ? unknownTopKeys(raw, knownKeys) : []
+  if (unknown.length > 0) {
+    const message = `Unknown top-level config keys${target()} (loaded from ${source}): ${unknown.join(', ')}`
+    match(toEnum(UnknownKeys, unknownKeys))
+      .with(UnknownKeys.Strict, () => fail(message))
+      .with(UnknownKeys.Warn, () => warn(message))
+      .with(UnknownKeys.Ignore, () => undefined)
+      .exhaustive()
   }
   return result.value
+}
+
+function unknownTopKeys(raw: unknown, knownKeys: readonly string[]): string[] {
+  return isPlainObject(raw)
+    ? Object.keys(raw).filter((key) => !knownKeys.includes(key))
+    : []
 }

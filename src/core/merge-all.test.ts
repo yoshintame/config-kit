@@ -2,11 +2,7 @@ import { describe, expect, test, vi } from 'vitest'
 
 import { createInMemorySource } from './in-memory-source'
 import { deepMerge, mergeAll } from './merge-all'
-import type { SyncConfigSource } from './source'
-
-function staticSource(value: unknown, name: string): SyncConfigSource {
-  return { loadSync: () => value, describe: () => name }
-}
+import { staticSource } from './test-sources'
 
 describe('deepMerge', () => {
   test('merges nested objects and lets overlay win', () => {
@@ -48,7 +44,10 @@ describe('mergeAll', () => {
       staticSource(null, 'null'),
       staticSource({ a: { c: 2 } }, 'local'),
     ])
-    expect(source.loadSync()).toEqual({ a: { b: 1, c: 2 } })
+    expect(source.loadSync()).toEqual({
+      raw: { a: { b: 1, c: 2 } },
+      source: 'base + local',
+    })
   })
 
   test('returns undefined when every source is empty', () => {

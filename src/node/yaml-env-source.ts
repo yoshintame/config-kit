@@ -1,6 +1,6 @@
 import { findUpSync } from 'find-up'
 
-import { firstNonEmpty, type Parser, type SyncConfigSource } from '../core'
+import { firstNonEmpty, type SyncConfigSource } from '../core'
 import { createFileSource } from './file-source'
 import { createProcessEnvSource } from './process-env-source'
 import { yamlParser } from './yaml-parser'
@@ -20,24 +20,18 @@ export function createYamlEnvSource({
     createProcessEnvSource({ envVar }),
     yamlPath
       ? createFileSource({ path: yamlPath, parser: yamlParser })
-      : createFindUpFileSource(yamlFile, yamlParser),
+      : createFindUpFileSource(yamlFile),
   ])
 }
 
-function createFindUpFileSource(
-  fileName: string,
-  parser: Parser,
-): SyncConfigSource {
-  let found: SyncConfigSource | undefined
-
+function createFindUpFileSource(fileName: string): SyncConfigSource {
   return {
     loadSync() {
       const path = findUpSync(fileName)
-      found = path ? createFileSource({ path, parser }) : undefined
-      return found?.loadSync()
+      return path
+        ? createFileSource({ path, parser: yamlParser }).loadSync()
+        : undefined
     },
-    describe: () =>
-      found?.describe() ??
-      `file ${fileName} (searched up from ${process.cwd()})`,
+    describe: () => `file ${fileName} (searched up from ${process.cwd()})`,
   }
 }

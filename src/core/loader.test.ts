@@ -99,7 +99,6 @@ describe('createSyncConfigLoader', () => {
     loader.loadRaw()
     expect(config.a).toBe(1)
     expect(config.a).toBe(1)
-    loader.validateAll()
 
     expect(loadSync).toHaveBeenCalledOnce()
     expect(parse).toHaveBeenCalledOnce()
@@ -136,97 +135,25 @@ describe('createSyncConfigLoader', () => {
     expect(loader.loadRaw()).toBe(raw)
   })
 
-  describe('validateAll', () => {
-    test('passes when every schema is valid', () => {
-      const loader = createSyncConfigLoader(
-        createInMemorySource({ a: 1, b: 's' }),
-      )
-      loader.defineConfig(z.object({ a: z.number() }))
-      loader.defineConfig(z.object({ b: z.string() }))
-      expect(() => loader.validateAll()).not.toThrow()
+  test('throws a missing error when the source is empty', () => {
+    const loader = createSyncConfigLoader(
+      createInMemorySource(undefined, 'env X'),
+    )
+    const config = loader.defineConfig(z.object({ a: z.number() }), {
+      name: 'db',
     })
-
-    test('reports a failing source once', () => {
-      const loader = createSyncConfigLoader({
-        loadSync: () => {
-          throw new Error('boom')
-        },
-        describe: () => 'broken',
-      })
-      loader.defineConfig(z.object({ a: z.number() }))
-      loader.defineConfig(z.object({ b: z.number() }))
-      expect(() => loader.validateAll()).toThrow(/^boom$/)
-    })
-
-    test('reports every failing schema', () => {
-      const loader = createSyncConfigLoader(createInMemorySource({}))
-      loader.defineConfig(z.object({ a: z.number() }).meta({ id: 'first' }))
-      loader.defineConfig(z.object({ b: z.string() }).meta({ id: 'second' }))
-      expect(() => loader.validateAll()).toThrow(
-        /for 'first'[\s\S]*\n\nConfig validation failed for 'second'/,
-      )
-    })
+    expect(loader.loadRaw()).toBeUndefined()
+    expect(() => config.a).toThrow(
+      expect.objectContaining({ kind: 'missing', section: 'db' }),
+    )
   })
 
-  describe('assertOnlyKnownTopKeys', () => {
-    test('passes when keys are covered by registered schemas', () => {
-      const loader = createSyncConfigLoader(
-        createInMemorySource({ a: 1, b: 2 }),
-      )
-      loader.defineConfig(z.object({ a: z.number() }))
-      loader.defineConfig(
-        z.object({ b: z.number() }).transform(({ b }) => ({ b: b * 2 })),
-      )
-      expect(() => loader.assertOnlyKnownTopKeys()).not.toThrow()
+  test('names the schema through the name option', () => {
+    const loader = createSyncConfigLoader(createInMemorySource({ a: 'x' }))
+    const config = loader.defineConfig(z.object({ a: z.number() }), {
+      name: 'explicit',
     })
-
-    test.each([
-      ['readonly', z.object({ b: z.number() }).readonly()],
-      ['default', z.object({ b: z.number() }).default({ b: 0 })],
-      ['optional', z.object({ b: z.number() }).optional()],
-      ['lazy', z.lazy(() => z.object({ b: z.number() }))],
-    ])('unwraps %s object schemas', (_, schema) => {
-      const loader = createSyncConfigLoader(
-        createInMemorySource({ a: 1, b: 2 }),
-      )
-      loader.defineConfig(z.object({ a: z.number() }))
-      loader.defineConfig(schema as z.ZodType<Record<string, unknown>>)
-      expect(() => loader.assertOnlyKnownTopKeys()).not.toThrow()
-    })
-
-    test('throws on unknown keys', () => {
-      const loader = createSyncConfigLoader(
-        createInMemorySource({ a: 1, typo: 2, other: 3 }),
-      )
-      loader.defineConfig(z.object({ a: z.number() }))
-      expect(() => loader.assertOnlyKnownTopKeys()).toThrow(
-        /Unknown top-level config keys \(loaded from in-memory\): typo, other$/,
-      )
-    })
-
-    test('accepts any key when a schema takes arbitrary keys', () => {
-      const loader = createSyncConfigLoader(createInMemorySource({ a: 1 }))
-      loader.defineConfig(z.object({ b: z.number().optional() }))
-      loader.defineConfig(z.record(z.string(), z.number()))
-      expect(() => loader.assertOnlyKnownTopKeys()).not.toThrow()
-    })
-
-    test('throws on a non-object schema', () => {
-      const loader = createSyncConfigLoader(createInMemorySource({ a: 1 }))
-      loader.defineConfig(z.array(z.number()).meta({ title: 'list' }) as never)
-      expect(() => loader.assertOnlyKnownTopKeys()).toThrow(
-        /'list': checking unknown keys needs an object schema/,
-      )
-    })
-
-    test.each([
-      ['array', [1]],
-      ['null', null],
-      ['string', 'config'],
-    ])('throws on %s root', (_, root) => {
-      const loader = createSyncConfigLoader(createInMemorySource(root))
-      expect(() => loader.assertOnlyKnownTopKeys()).toThrow(/not an object/)
-    })
+    expect(() => config.a).toThrow(/for 'explicit'/)
   })
 
   describe('onChange', () => {
@@ -258,7 +185,7 @@ describe('createSyncConfigLoader', () => {
       const unwatch = vi.fn()
       const watch = vi.fn(() => unwatch)
       const loader = createSyncConfigLoader({
-        loadSync: () => ({}),
+        loadSync: () => ({ raw: {}, source: 'watched' }),
         describe: () => 'watched',
         watch,
       })
@@ -275,7 +202,7 @@ describe('createSyncConfigLoader', () => {
 
     test('is a no-op for sources without watch', () => {
       const loader = createSyncConfigLoader({
-        loadSync: () => ({}),
+        loadSync: () => ({ raw: {}, source: 'static' }),
         describe: () => 'static',
       })
       const unsubscribe = loader.onChange(() => {})

@@ -12,7 +12,8 @@ export function createInMemorySource(
   const listeners = new Set<() => void>()
 
   return {
-    loadSync: () => value,
+    loadSync: () =>
+      value === undefined ? undefined : { raw: value, source: origin },
     describe: () => origin,
     watch(onChange) {
       listeners.add(onChange)

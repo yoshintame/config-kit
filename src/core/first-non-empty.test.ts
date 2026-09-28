@@ -2,11 +2,7 @@ import { describe, expect, test, vi } from 'vitest'
 
 import { firstNonEmpty } from './first-non-empty'
 import { createInMemorySource } from './in-memory-source'
-import type { SyncConfigSource } from './source'
-
-function staticSource(value: unknown, name: string): SyncConfigSource {
-  return { loadSync: () => value, describe: () => name }
-}
+import { staticSource } from './test-sources'
 
 describe('firstNonEmpty', () => {
   test('returns the first value that is not undefined or null', () => {
@@ -16,27 +12,23 @@ describe('firstNonEmpty', () => {
       staticSource({}, 'c'),
       staticSource({ d: 1 }, 'd'),
     ])
-    expect(source.loadSync()).toEqual({})
+    expect(source.loadSync()).toEqual({ raw: {}, source: 'c' })
   })
 
-  test('describe reports the resolved source', () => {
+  test('describe lists every source', () => {
     const source = firstNonEmpty([
       staticSource(undefined, 'a'),
       staticSource(1, 'b'),
     ])
     expect(source.describe()).toBe('first non-empty of [a, b]')
-    source.loadSync()
-    expect(source.describe()).toBe('b')
   })
 
-  test('throws listing every source when all are empty', () => {
+  test('returns undefined when all are empty', () => {
     const source = firstNonEmpty([
       staticSource(undefined, 'env X'),
       staticSource(null, 'file y.yaml'),
     ])
-    expect(() => source.loadSync()).toThrow(
-      'Config not found in any source: env X, file y.yaml',
-    )
+    expect(source.loadSync()).toBeUndefined()
   })
 
   test('propagates source errors', () => {

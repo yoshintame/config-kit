@@ -1,15 +1,12 @@
-import { isNil, isPlainObject } from 'es-toolkit'
+import { isPlainObject } from 'es-toolkit'
 
-import type { SyncConfigSource } from './source'
+import { isLoaded } from './guards'
+import type { RawConfig, SyncConfigSource } from './source'
 import { watchAll } from './watch-all'
 
 export function mergeAll(sources: SyncConfigSource[]): SyncConfigSource {
   return {
-    loadSync: () =>
-      sources
-        .map((source) => source.loadSync())
-        .filter((value) => !isNil(value))
-        .reduce<unknown>(deepMerge, undefined),
+    loadSync: () => mergeLoaded(sources.map((source) => source.loadSync())),
     describe: () =>
       `merge of [${sources.map((source) => source.describe()).join(', ')}]`,
     ...watchAll(sources),
@@ -21,6 +18,16 @@ export function deepMerge(base: unknown, overlay: unknown): unknown {
   return isPlainObject(base) && isPlainObject(overlay)
     ? mergeObjects(base, overlay)
     : overlay
+}
+
+function mergeLoaded(loaded: (RawConfig | undefined)[]): RawConfig | undefined {
+  const present = loaded.filter(isLoaded)
+  return present.length === 0
+    ? undefined
+    : {
+        raw: present.map(({ raw }) => raw).reduce(deepMerge),
+        source: present.map(({ source }) => source).join(' + '),
+      }
 }
 
 function mergeObjects(

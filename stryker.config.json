@@ -12,7 +12,8 @@
     "src/**/*.ts",
     "!src/**/*.test.ts",
     "!src/*/index.ts",
-    "!src/node/browser.ts"
+    "!src/node/browser.ts",
+    "!src/**/test-*.ts"
   ],
   "reporters": ["clear-text", "progress", "html"],
   "htmlReporter": {

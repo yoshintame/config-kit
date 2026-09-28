@@ -36,7 +36,8 @@ describe('createProcessEnvSource', () => {
   test('parses JSON by default', () => {
     process.env[ENV_VAR] = '{"a":1}'
     expect(createProcessEnvSource({ envVar: ENV_VAR }).loadSync()).toEqual({
-      a: 1,
+      raw: { a: 1 },
+      source: `env ${ENV_VAR}`,
     })
   })
 
@@ -59,7 +60,7 @@ describe('createProcessEnvSource', () => {
       envVar: ENV_VAR,
       parser: yamlParser,
     })
-    expect(source.loadSync()).toEqual({ a: 1 })
+    expect(source.loadSync()?.raw).toEqual({ a: 1 })
   })
 
   test('throws with origin on parse failure', () => {
@@ -75,7 +76,7 @@ describe('createFileSource', () => {
     const path = join(tmpDir, 'config.json')
     writeFileSync(path, '{"a":1}')
     const source = createFileSource({ path, parser: jsonParser })
-    expect(source.loadSync()).toEqual({ a: 1 })
+    expect(source.loadSync()?.raw).toEqual({ a: 1 })
     expect(source.describe()).toBe(`file ${path}`)
   })
 
@@ -102,7 +103,9 @@ describe('createYamlEnvSource', () => {
       yamlFile: YAML_FILE,
       yamlPath,
     })
-    expect(source.loadSync()).toEqual({ db: { host: '127.0.0.1', port: 5432 } })
+    expect(source.loadSync()?.raw).toEqual({
+      db: { host: '127.0.0.1', port: 5432 },
+    })
   })
 
   test('env variable wins over yaml', () => {
@@ -113,8 +116,10 @@ describe('createYamlEnvSource', () => {
       yamlFile: YAML_FILE,
       yamlPath,
     })
-    expect(source.loadSync()).toEqual({ db: { host: 'from-env' } })
-    expect(source.describe()).toBe(`env ${ENV_VAR}`)
+    expect(source.loadSync()).toEqual({
+      raw: { db: { host: 'from-env' } },
+      source: `env ${ENV_VAR}`,
+    })
   })
 
   test('finds yaml up from cwd', () => {
@@ -123,28 +128,29 @@ describe('createYamlEnvSource', () => {
     mkdirSync(nested, { recursive: true })
     vi.spyOn(process, 'cwd').mockReturnValue(nested)
     const source = createYamlEnvSource({ envVar: ENV_VAR, yamlFile: YAML_FILE })
-    expect(source.loadSync()).toEqual({ a: 1 })
-    expect(source.describe()).toBe(`file ${yamlPath}`)
+    expect(source.loadSync()).toEqual({
+      raw: { a: 1 },
+      source: `file ${yamlPath}`,
+    })
   })
 
   test('reports the search location when yaml is not found up the tree', () => {
     vi.spyOn(process, 'cwd').mockReturnValue(tmpDir)
     const source = createYamlEnvSource({ envVar: ENV_VAR, yamlFile: YAML_FILE })
-    expect(() => source.loadSync()).toThrow(
-      `Config not found in any source: env ${ENV_VAR}, file ${YAML_FILE} (searched up from ${tmpDir})`,
+    expect(source.loadSync()).toBeUndefined()
+    expect(source.describe()).toBe(
+      `first non-empty of [env ${ENV_VAR}, file ${YAML_FILE} (searched up from ${tmpDir})]`,
     )
   })
 
-  test('throws when neither env nor yaml available', () => {
+  test('is empty when neither env nor yaml available', () => {
     const missing = join(tmpDir, 'does-not-exist.yaml')
     const source = createYamlEnvSource({
       envVar: ENV_VAR,
       yamlFile: YAML_FILE,
       yamlPath: missing,
     })
-    expect(() => source.loadSync()).toThrow(
-      `Config not found in any source: env ${ENV_VAR}, file ${missing}`,
-    )
+    expect(source.loadSync()).toBeUndefined()
   })
 })
 

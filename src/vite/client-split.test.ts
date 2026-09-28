@@ -9,13 +9,17 @@ function split(code: string, keepOnInvalid = true) {
 
 const CONFIG = [
   "import { defineConfigKit } from '@yoshintame/config-kit'",
+  "import { readFileSync } from 'node:fs'",
   "import { z } from 'zod'",
-  'const publicSchema = z.object({ a: z.string() })',
+  "import { Env } from './env'",
+  'const isTest = process.env.VITEST',
+  'const publicSchema = z.object({ env: z.enum(Env) })',
   'const serverSchema = publicSchema.extend({ secret: z.string() })',
+  'function renderScreen() { return "SCREEN" }',
   'export default defineConfigKit({',
   '  schemas: { public: publicSchema, server: serverSchema },',
-  "  onInvalid(error) { console.log('HANDLER') },",
-  "  dev: { serverRestart: ['DEV'] },",
+  '  onInvalid(error) { renderScreen() },',
+  "  dev: { localYamlFile: isTest ? false : readFileSync('x', 'utf8') },",
   "  sensitive: ['build.token'],",
   '})',
 ].join('\n')
@@ -23,36 +27,50 @@ const CONFIG = [
 describe('splitConfigModule', () => {
   test('keeps the public schema and onInvalid', () => {
     expect(split(CONFIG)).toContain(
-      "export default defineConfigKit({schemas: {public: publicSchema}, onInvalid(error) { console.log('HANDLER') }})",
+      'export default defineConfigKit({schemas: {public: publicSchema}, onInvalid(error) { renderScreen() }})',
     )
   })
 
-  test('drops onInvalid for the validator', () => {
-    expect(split(CONFIG, false)).toContain(
+  test('drops onInvalid and what only it uses for the validator', () => {
+    const code = split(CONFIG, false)
+    expect(code).toContain(
       'export default defineConfigKit({schemas: {public: publicSchema}})',
     )
+    expect(code).not.toContain('renderScreen')
   })
 
-  test('marks top-level initializers as pure', () => {
-    expect(split(CONFIG)).toContain(
-      'const serverSchema = /*#__PURE__*/(() => (publicSchema.extend({ secret: z.string() })))()',
-    )
+  test('removes declarations and imports nothing kept reaches', () => {
+    const code = split(CONFIG)
+    expect(code).not.toContain('serverSchema')
+    expect(code).not.toContain('process.env')
+    expect(code).not.toContain('node:fs')
+    expect(code).toContain("import { z } from 'zod'")
+    expect(code).toContain("import { Env } from './env'")
+    expect(code).toContain('const publicSchema')
   })
 
   test('follows a default-exported identifier', () => {
     const code = [
+      'const s = 1',
+      'const p = 2',
       'const config = defineConfigKit({ schemas: { public: p, server: s } })',
       'export default config',
     ].join('\n')
-    expect(split(code)).toContain('{schemas: {public: p}}')
+    const result = split(code)
+    expect(result).toContain('{schemas: {public: p}}')
+    expect(result).not.toContain('const s')
   })
 
-  test('leaves initializers with top-level await alone', () => {
+  test('keeps top-level statements and named exports', () => {
     const code = [
-      'const p = await load()',
+      'const registry = create()',
+      'registry.add(1)',
+      'export const shared = 2',
       'export default { schemas: { public: p } }',
     ].join('\n')
-    expect(split(code)).toContain('const p = await load()')
+    const result = split(code)
+    expect(result).toContain('const registry')
+    expect(result).toContain('export const shared')
   })
 
   test.each([
@@ -63,18 +81,40 @@ describe('splitConfigModule', () => {
   ])('gives up on a %s', (_, code) => {
     expect(split(code)).toBeUndefined()
   })
+})
 
-  test('transformConfigFile warns when it cannot split', () => {
+describe('transformConfigFile', () => {
+  const base = {
+    configPath: '/app/config-kit.config.ts',
+    keepOnInvalid: true,
+    skipSsr: true,
+  }
+
+  test('warns when it cannot split', () => {
     const warn = vi.fn()
     transformConfigFile(
       { parse: parseAst, warn },
-      'export default { schemas }',
       {
-        keepOnInvalid: true,
+        ...base,
+        code: 'export default { schemas }',
+        id: '/app/config-kit.config.ts?v=1',
+        ssr: false,
       },
     )
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('could not split the config file'),
     )
+  })
+
+  test.each([
+    ['another file', '/app/other.ts', false],
+    ['an SSR copy', '/app/config-kit.config.ts', true],
+  ])('leaves %s alone', (_, id, ssr) => {
+    expect(
+      transformConfigFile(
+        { parse: parseAst, warn: vi.fn() },
+        { ...base, code: CONFIG, id, ssr },
+      ),
+    ).toBeUndefined()
   })
 })

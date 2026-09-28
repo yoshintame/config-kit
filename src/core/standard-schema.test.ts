@@ -6,6 +6,7 @@ import { z } from 'zod'
 
 import { parseOrThrow } from './parse-or-throw'
 import {
+  JsonSchemaIo,
   jsonSchemaOf,
   objectProperties,
   type StandardSchemaV1,
@@ -34,7 +35,9 @@ const libraries: [string, StandardSchemaV1][] = [
 
 describe.each(libraries)('%s', (_, schema) => {
   test('validates and applies defaults', () => {
-    expect(parseOrThrow(schema, { app: { title: 'crm' } }, 'test')).toEqual({
+    expect(
+      parseOrThrow(schema, { raw: { app: { title: 'crm' } }, source: 'test' }),
+    ).toEqual({
       app: { title: 'crm' },
       flag: false,
     })
@@ -42,9 +45,13 @@ describe.each(libraries)('%s', (_, schema) => {
 
   test('reports issues with the section name, source and path', () => {
     expect(() =>
-      parseOrThrow(schema, { app: { title: 1 } }, 'env APP', {
-        name: 'public',
-      }),
+      parseOrThrow(
+        schema,
+        { raw: { app: { title: 1 } }, source: 'env APP' },
+        {
+          name: 'public',
+        },
+      ),
     ).toThrow(
       /^Config validation failed for 'public' \(loaded from env APP\):\n✖ .+\n {2}→ at app\.title$/,
     )
@@ -56,11 +63,15 @@ describe.each(libraries)('%s', (_, schema) => {
 
   test('rejects unknown keys in strict mode', () => {
     expect(() =>
-      parseOrThrow(schema, { app: { title: 'crm' }, typo: 1 }, 'test', {
-        name: 'public',
-        knownKeys: ['app', 'flag'],
-        unknownKeys: 'strict',
-      }),
+      parseOrThrow(
+        schema,
+        { raw: { app: { title: 'crm' }, typo: 1 }, source: 'test' },
+        {
+          name: 'public',
+          knownKeys: ['app', 'flag'],
+          unknownKeys: 'strict',
+        },
+      ),
     ).toThrow(
       "Unknown top-level config keys for 'public' (loaded from test): typo",
     )
@@ -70,11 +81,15 @@ describe.each(libraries)('%s', (_, schema) => {
 describe('parseOrThrow', () => {
   test('warns about unknown keys in warn mode', () => {
     const warn = vi.fn()
-    parseOrThrow(z.object({ a: z.number() }), { a: 1, b: 2 }, 'test', {
-      knownKeys: ['a'],
-      unknownKeys: 'warn',
-      warn,
-    })
+    parseOrThrow(
+      z.object({ a: z.number() }),
+      { raw: { a: 1, b: 2 }, source: 'test' },
+      {
+        knownKeys: ['a'],
+        unknownKeys: 'warn',
+        warn,
+      },
+    )
     expect(warn).toHaveBeenCalledWith(
       'Unknown top-level config keys (loaded from test): b',
     )
@@ -82,16 +97,24 @@ describe('parseOrThrow', () => {
 
   test('ignores unknown keys by default', () => {
     expect(
-      parseOrThrow(z.object({ a: z.number() }), { a: 1, b: 2 }, 'test', {
-        knownKeys: ['a'],
-      }),
+      parseOrThrow(
+        z.object({ a: z.number() }),
+        { raw: { a: 1, b: 2 }, source: 'test' },
+        {
+          knownKeys: ['a'],
+        },
+      ),
     ).toEqual({ a: 1 })
   })
 
   test('rejects asynchronous validation', () => {
     const schema = z.object({ a: z.string().refine(async () => true) })
     expect(() =>
-      parseOrThrow(schema, { a: 'x' }, 'test', { name: 'build' }),
+      parseOrThrow(
+        schema,
+        { raw: { a: 'x' }, source: 'test' },
+        { name: 'build' },
+      ),
     ).toThrow(
       "Config for 'build': the schema validates asynchronously, config-kit needs a synchronous result",
     )
@@ -100,7 +123,7 @@ describe('parseOrThrow', () => {
   test('formats non-identifier keys and array indices', () => {
     const schema = z.object({ 'x-header': z.array(z.string()) })
     expect(() =>
-      parseOrThrow(schema, { 'x-header': ['a', 1] }, 'test'),
+      parseOrThrow(schema, { raw: { 'x-header': ['a', 1] }, source: 'test' }),
     ).toThrow(/→ at \["x-header"\]\[1\]$/)
   })
 })
@@ -125,11 +148,23 @@ describe('topLevelKeys', () => {
 })
 
 describe('objectProperties', () => {
+  test('merges the properties of union variants', () => {
+    const schema = z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('a'), left: z.string() }),
+      z.object({ kind: z.literal('b'), right: z.string() }),
+    ])
+    expect(topLevelKeys(schema, 'public')?.sort()).toEqual([
+      'kind',
+      'left',
+      'right',
+    ])
+  })
+
   test('finds nested object properties through optional and nullable', () => {
     const schema = z.object({
       nested: z.object({ token: z.string().optional() }).nullable(),
     })
-    const root = jsonSchemaOf(schema, 'output')!
+    const root = jsonSchemaOf(schema, JsonSchemaIo.Output)!
     const nested = objectProperties(root)?.nested
     expect(Object.keys(objectProperties(nested!, root) ?? {})).toEqual([
       'token',

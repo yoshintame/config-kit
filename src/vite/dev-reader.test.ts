@@ -76,7 +76,7 @@ describe('createDevReader', () => {
     vi.stubEnv('APP_PRIVATE_CONFIG', JSON.stringify({ secret: 1 }))
     const reader = devReader({ server: z.object({ secret: z.string() }) })
     expect(() => reader.load()).toThrow(
-      /loaded from merge of \[.*\] \(public\) \+ env APP_PRIVATE_CONFIG/,
+      /loaded from file .*config\.yaml \(public\) \+ env APP_PRIVATE_CONFIG\)/,
     )
   })
 
@@ -89,7 +89,7 @@ describe('createDevReader', () => {
   test('throws when no public config is found', () => {
     rmSync(join(root, 'config.yaml'))
     expect(() => devReader().load()).toThrow(
-      /^Config not found in any source: env APP_PUBLIC_CONFIG, merge of/,
+      /^Config not found in first non-empty of \[env APP_PUBLIC_CONFIG, merge of \[.*\] \(public\)\]/,
     )
   })
 

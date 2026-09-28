@@ -1,101 +1,66 @@
+import { isPromise } from 'es-toolkit'
+import { match } from 'ts-pattern'
+
 import {
   type ConfigKitDefinition,
   ConfigKitError,
+  createInMemorySource,
   errorMessage,
-  parseOrThrow,
-  type StandardSchemaV1,
-  type UnknownKeys,
+  type ResolveSectionOptions,
+  resolveSection,
+  Section,
 } from '../core'
 import { renderConfigError } from './render-config-error'
 
-export interface RawConfig {
-  raw: unknown
-  source: string
-}
+type PublicConfigDefinition = Pick<ConfigKitDefinition, 'schemas' | 'onInvalid'>
 
-export interface ResolvePublicConfigOptions<S extends StandardSchemaV1> {
-  config: {
-    schemas: { public: S }
-    onInvalid?: ConfigKitDefinition['onInvalid']
-  }
-  read(): RawConfig
-  knownKeys?: readonly string[]
-  unknownKeys?: UnknownKeys
-}
-
-const SECTION = 'public'
-
-export function resolvePublicConfig<S extends StandardSchemaV1>({
-  config,
-  read,
-  knownKeys,
-  unknownKeys,
-}: ResolvePublicConfigOptions<S>): StandardSchemaV1.InferOutput<S> {
-  const parse = ({ raw, source }: RawConfig) =>
-    parseOrThrow(config.schemas.public, raw, source, {
-      name: SECTION,
-      knownKeys,
-      unknownKeys,
-    })
+export function resolvePublicConfig(
+  config: PublicConfigDefinition,
+  options: ResolveSectionOptions,
+): unknown {
   try {
-    return parse(read())
+    return resolveSection(config, Section.Public, options)
   } catch (error) {
     if (!(error instanceof ConfigKitError)) throw error
-    const fallback = handleInvalid(config.onInvalid, error)
-    if (fallback === undefined) throw error
-    return parse({ raw: fallback, source: 'onInvalid' })
+    return resolveFallback(config, options, error)
   }
 }
 
-function handleInvalid(
-  onInvalid: ConfigKitDefinition['onInvalid'],
+function resolveFallback(
+  config: PublicConfigDefinition,
+  options: ResolveSectionOptions,
   error: ConfigKitError,
 ): unknown {
   const renderDefault = () => renderConfigError(error)
-  if (!onInvalid) {
-    renderDefault()
-    return undefined
-  }
-  const result = onInvalid(error, {
-    kind: error.kind,
-    section: SECTION,
-    source: error.source,
-    renderDefault,
-  })
-  return isThenable(result) ? undefined : result
-}
+  const fallback = config.onInvalid
+    ? config.onInvalid(error, {
+        kind: error.kind,
+        section: Section.Public,
+        source: error.source,
+        renderDefault,
+      })
+    : renderDefault()
+  if (!isUsableFallback(fallback)) throw error
 
-function isThenable(value: unknown): boolean {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as { then?: unknown }).then === 'function'
-  )
-}
-
-export function readConfigScript(elementId: string, envVar: string): RawConfig {
-  const source = `script#${elementId}`
-  const details = { section: SECTION, source }
-  const text = globalThis.document?.getElementById(elementId)?.textContent
-  if (!text?.trim()) {
-    throw new ConfigKitError(`Config element ${source} is missing or empty`, {
-      kind: 'missing',
-      ...details,
-    })
-  }
-  if (text.trim() === `\${${envVar}}`) {
-    throw new ConfigKitError(
-      `${source} still holds the \${${envVar}} placeholder: the container did not substitute ${envVar} into index.html`,
-      { kind: 'placeholder', ...details },
-    )
-  }
   try {
-    return { raw: JSON.parse(text), source }
-  } catch (error) {
-    throw new ConfigKitError(
-      `Failed to parse ${source}: ${errorMessage(error)}`,
-      { kind: 'parse', ...details },
-      { cause: error },
+    return resolveSection(config, Section.Public, {
+      ...options,
+      source: createInMemorySource(fallback, 'onInvalid'),
+    })
+  } catch (fallbackError) {
+    const combined = new ConfigKitError(
+      `${error.message}\n\nThe config returned by onInvalid is invalid too:\n${errorMessage(fallbackError)}`,
+      { kind: error.kind, section: Section.Public, source: error.source },
+      { cause: fallbackError },
     )
+    renderConfigError(combined)
+    throw combined
   }
+}
+
+function isUsableFallback(fallback: unknown): boolean {
+  return match(fallback)
+    .with(undefined, () => false)
+    .when(isPromise, () => false)
+    .otherwise(() => true)
 }

@@ -1,112 +1,130 @@
-import { isPlainObject, union } from 'es-toolkit'
+import { isJSONValue, isPlainObject, union } from 'es-toolkit'
+import { match, P } from 'ts-pattern'
 
+import { type RawConfig, Section } from '../core'
 import { type JsonSchema, objectProperties } from '../core/standard-schema'
-import type { ConfigKitSettings, Section } from './config-file'
-import { PACKAGE_NAME } from './constants'
-import type { LoadedConfig } from './dev-reader'
+import type { ConfigKitSettings } from './config-file'
+import {
+  configModulesBySection,
+  envPlaceholder,
+  PACKAGE_NAME,
+} from './constants'
 
-export type ConfigModuleKind = 'public' | 'server'
-
-const CONFIG_EXPORTS: Record<ConfigModuleKind, string> = {
-  public: 'publicConfig',
-  server: 'serverConfig',
-}
+export type ConfigSection = Section.Public | Section.Server
 
 interface ModuleTarget {
-  kind: ConfigModuleKind
-  configFile: string
+  section: ConfigSection
+  configPath: string
   settings: ConfigKitSettings
 }
 
 export function devModule({
-  loaded: { raw, origin },
+  section,
+  configPath,
+  settings,
+  loaded: { raw, source },
   hmr,
-  ...target
-}: ModuleTarget & { loaded: LoadedConfig; hmr: boolean }): string {
-  const read = `() => ({ raw: ${JSON.stringify(raw)}, source: ${JSON.stringify(origin)} })`
-  const exported = CONFIG_EXPORTS[target.kind]
-  return [
-    configImport(target.configFile),
-    ...(target.kind === 'public'
-      ? [
-          `import { resolvePublicConfig } from '${PACKAGE_NAME}/browser'`,
-          `const value = ${resolvePublic(target.settings, read)}`,
-        ]
-      : [
-          `import { parseOrThrow } from '${PACKAGE_NAME}'`,
-          `const { raw, source } = (${read})()`,
-          `const value = parseOrThrow(${serverSchema}, raw, source, ${parseOptions(target.settings, 'server')})`,
-        ]),
-    ...(hmr
-      ? [
-          `import { liveView } from '${PACKAGE_NAME}'`,
-          'const state = import.meta.hot?.data.state ?? {}',
-          'state.value = value',
-          'if (import.meta.hot) {',
-          '  import.meta.hot.data.state = state',
-          '  import.meta.hot.accept()',
-          '}',
-          `export const ${exported} = liveView(state)`,
-        ]
-      : [`export const ${exported} = value`]),
-  ].join('\n')
+}: ModuleTarget & { loaded: RawConfig; hmr: boolean }): string {
+  const sourceCode = call('createInMemorySource', raw, source)
+  const value = match(section)
+    .with(Section.Public, () => publicValue(settings, sourceCode))
+    .with(Section.Server, () => sectionValue(settings, section, sourceCode))
+    .exhaustive()
+  return moduleCode({
+    configPath,
+    section,
+    imports: {
+      [PACKAGE_NAME]: [
+        'createInMemorySource',
+        ...(section === Section.Server ? ['resolveSection'] : []),
+        ...(hmr ? ['liveConfig'] : []),
+      ],
+      ...(section === Section.Public
+        ? { [`${PACKAGE_NAME}/browser`]: ['resolvePublicConfig'] }
+        : {}),
+    },
+    value: hmr ? `liveConfig(import.meta.hot, ${value})` : value,
+    footer: hmr ? ['if (import.meta.hot) import.meta.hot.accept()'] : [],
+  })
 }
 
 export function buildModule({
+  section,
+  configPath,
+  settings,
   ssr,
-  ...target
 }: ModuleTarget & { ssr: boolean }): string {
-  const { settings } = target
-  const exported = CONFIG_EXPORTS[target.kind]
-  if (target.kind === 'public' && !ssr) {
-    const read = `() => readConfigScript(${JSON.stringify(settings.elementId)}, ${JSON.stringify(settings.envVars.public)})`
-    return [
-      configImport(target.configFile),
-      `import { readConfigScript, resolvePublicConfig } from '${PACKAGE_NAME}/browser'`,
-      `export const ${exported} = ${resolvePublic(settings, read)}`,
-    ].join('\n')
-  }
-  const server = target.kind === 'server'
-  const options = [
-    `schema: ${server ? serverSchema : 'config.schemas.public'}`,
-    `name: ${JSON.stringify(target.kind)}`,
-    `envVar: ${JSON.stringify(settings.envVars.public)}`,
-    ...(server
-      ? [`overlayEnvVar: ${JSON.stringify(settings.envVars.private)}`]
-      : []),
-    ...keyOptions(settings, target.kind),
-  ]
-  return [
-    configImport(target.configFile),
-    `import { resolveEnvConfig } from '${PACKAGE_NAME}/node'`,
-    `export const ${exported} = resolveEnvConfig({ ${options.join(', ')} })`,
-  ].join('\n')
+  const { elementId, envVars } = settings
+  return match({ section, ssr })
+    .with({ section: Section.Public, ssr: false }, () =>
+      moduleCode({
+        configPath,
+        section,
+        imports: {
+          [`${PACKAGE_NAME}/browser`]: [
+            'createJsonScriptSource',
+            'resolvePublicConfig',
+          ],
+        },
+        value: publicValue(
+          settings,
+          call('createJsonScriptSource', {
+            elementId,
+            placeholder: envPlaceholder(envVars.public),
+          }),
+        ),
+      }),
+    )
+    .with({ section: Section.Public, ssr: true }, () =>
+      moduleCode({
+        configPath,
+        section,
+        imports: {
+          [PACKAGE_NAME]: ['resolveSection'],
+          [`${PACKAGE_NAME}/node`]: ['createProcessEnvSource'],
+        },
+        value: sectionValue(
+          settings,
+          section,
+          call('createProcessEnvSource', { envVar: envVars.public }),
+        ),
+      }),
+    )
+    .with({ section: Section.Server }, () =>
+      moduleCode({
+        configPath,
+        section,
+        imports: {
+          [PACKAGE_NAME]: ['resolveSection'],
+          [`${PACKAGE_NAME}/node`]: ['createServerEnvSource'],
+        },
+        value: sectionValue(
+          settings,
+          section,
+          call('createServerEnvSource', {
+            publicEnvVar: envVars.public,
+            privateEnvVar: envVars.private,
+          }),
+        ),
+      }),
+    )
+    .exhaustive()
 }
 
 export function validatorModule({
-  configFile,
+  configPath,
   settings,
 }: {
-  configFile: string
+  configPath: string
   settings: ConfigKitSettings
 }): string {
-  const envVar = JSON.stringify(settings.envVars.public)
-  const options = [
-    'schema: config.schemas.public',
-    "name: 'public'",
-    `envVar: ${envVar}`,
-    ...keyOptions(settings, 'public'),
-  ]
   return [
-    configImport(configFile),
-    `import { resolveEnvConfig } from '${PACKAGE_NAME}/node'`,
-    'try {',
-    `  resolveEnvConfig({ ${options.join(', ')} })`,
-    '} catch (error) {',
-    '  console.error(error instanceof Error ? error.message : String(error))',
-    '  process.exit(1)',
-    '}',
-    `console.log(${envVar} + ' is valid')`,
+    configImport(configPath),
+    `import { runValidator } from '${PACKAGE_NAME}/node'`,
+    call('runValidator', CONFIG, {
+      envVar: settings.envVars.public,
+      ...keyOptions(settings, Section.Public),
+    }).code,
   ].join('\n')
 }
 
@@ -114,46 +132,119 @@ export function buildConfigModule(
   value: unknown,
   shape: JsonSchema | undefined,
 ): string {
-  return `export const buildConfig = ${literal(value ?? {}, shape, shape)}`
+  return `export const ${configModulesBySection[Section.Build].exportName} = ${literal({ value: value ?? {}, shape, root: shape, path: 'buildConfig' })}`
 }
 
-function literal(
-  value: unknown,
-  shape: JsonSchema | undefined,
-  root: JsonSchema | undefined,
+class Code {
+  public constructor(public readonly code: string) {}
+}
+
+const CONFIG = new Code('config')
+
+function publicValue(settings: ConfigKitSettings, sourceCode: Code): string {
+  return call('resolvePublicConfig', CONFIG, {
+    source: sourceCode,
+    ...keyOptions(settings, Section.Public),
+  }).code
+}
+
+function sectionValue(
+  settings: ConfigKitSettings,
+  section: ConfigSection,
+  sourceCode: Code,
 ): string {
-  if (value === undefined) return 'undefined'
-  if (!isPlainObject(value)) return JSON.stringify(value)
-  const properties = shape && root ? objectProperties(shape, root) : undefined
-  const keys = union(Object.keys(value), Object.keys(properties ?? {}))
-  const entries = keys.map(
-    (key) =>
-      `${JSON.stringify(key)}:${literal(value[key], properties?.[key], root)}`,
-  )
-  return `{${entries.join(',')}}`
+  return call('resolveSection', CONFIG, section, {
+    source: sourceCode,
+    ...keyOptions(settings, section),
+  }).code
 }
 
-const serverSchema = '(config.schemas.server ?? config.schemas.public)'
-
-function resolvePublic(settings: ConfigKitSettings, read: string): string {
-  const options = ['config', `read: ${read}`, ...keyOptions(settings, 'public')]
-  return `resolvePublicConfig({ ${options.join(', ')} })`
+function keyOptions(
+  { knownKeysBySection, unknownKeys }: ConfigKitSettings,
+  section: Section,
+): Record<string, unknown> {
+  const knownKeys = knownKeysBySection[section]
+  return knownKeys ? { knownKeys, unknownKeys } : {}
 }
 
-function parseOptions(settings: ConfigKitSettings, section: Section): string {
-  return `{ ${[`name: ${JSON.stringify(section)}`, ...keyOptions(settings, section)].join(', ')} }`
+function moduleCode({
+  configPath,
+  section,
+  imports,
+  value,
+  footer = [],
+}: {
+  configPath: string
+  section: ConfigSection
+  imports: Record<string, string[]>
+  value: string
+  footer?: string[]
+}): string {
+  return [
+    configImport(configPath),
+    ...Object.entries(imports).map(
+      ([specifier, names]) =>
+        `import { ${names.join(', ')} } from '${specifier}'`,
+    ),
+    `export const ${configModulesBySection[section].exportName} = ${value}`,
+    ...footer,
+  ].join('\n')
 }
 
-function keyOptions(settings: ConfigKitSettings, section: Section): string[] {
-  const knownKeys = settings.knownKeys[section]
-  return knownKeys
-    ? [
-        `knownKeys: ${JSON.stringify(knownKeys)}`,
-        `unknownKeys: ${JSON.stringify(settings.unknownKeys)}`,
-      ]
-    : []
+function configImport(configPath: string): string {
+  return `import ${CONFIG.code} from ${JSON.stringify(configPath)}`
 }
 
-function configImport(configFile: string): string {
-  return `import config from ${JSON.stringify(configFile)}`
+function call(name: string, ...args: unknown[]): Code {
+  return new Code(`${name}(${args.map(serialize).join(', ')})`)
+}
+
+function serialize(value: unknown): string {
+  return match(value)
+    .with(P.instanceOf(Code), ({ code }) => code)
+    .when(
+      isPlainObject,
+      (object) =>
+        `{ ${Object.entries(object)
+          .map(([key, item]) => `${JSON.stringify(key)}: ${serialize(item)}`)
+          .join(', ')} }`,
+    )
+    .otherwise((json) => JSON.stringify(json))
+}
+
+function literal({
+  value,
+  shape,
+  root,
+  path,
+}: {
+  value: unknown
+  shape: JsonSchema | undefined
+  root: JsonSchema | undefined
+  path: string
+}): string {
+  return match(value)
+    .with(undefined, () => 'undefined')
+    .when(isPlainObject, (object) => {
+      const properties = shape
+        ? objectProperties(shape, root ?? shape)
+        : undefined
+      const keys = union(Object.keys(object), Object.keys(properties ?? {}))
+      const entries = keys.map(
+        (key) =>
+          `${JSON.stringify(key)}:${literal({
+            value: object[key],
+            shape: properties?.[key],
+            root,
+            path: `${path}.${key}`,
+          })}`,
+      )
+      return `{${entries.join(',')}}`
+    })
+    .when(isJSONValue, (json) => JSON.stringify(json))
+    .otherwise(() => {
+      throw new Error(
+        `${path} is not a JSON value: buildConfig is inlined into the bundle, so the build schema must output JSON`,
+      )
+    })
 }

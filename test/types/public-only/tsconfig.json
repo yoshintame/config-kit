@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@yoshintame/config-kit": ["../../../src/core/index.ts"]
+    }
+  },
+  "include": ["src", "*.config.ts", "../../../client.d.ts"]
+}

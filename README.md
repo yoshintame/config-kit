@@ -58,22 +58,27 @@ The config comes from the JSON in `APP_CONFIG` if it is set, otherwise from `app
 ### Sources
 
 ```ts
+interface RawConfig {
+  raw: unknown
+  source: string
+}
+
 interface SyncConfigSource {
-  loadSync(): unknown
+  loadSync(): RawConfig | undefined
   describe(): string
   watch?(onChange: () => void): () => void
 }
 ```
 
-A source returns the raw config or `undefined` when it has nothing. `describe()` appears in error messages. Middleware such as decryption or interpolation wraps a source and returns a source.
+A source returns the raw config together with where it came from (`env APP_CONFIG`, `file /srv/app/app.config.yaml`), or `undefined` when it has nothing. Composed sources report the source that actually delivered. `describe()` names what the source would read, for errors when nothing was found. Middleware such as decryption or interpolation wraps a source and returns a source.
 
 ### `createSyncConfigLoader(source)`
 
 - **`defineConfig(schema, { name? })`** returns a read-only proxy over the parsed output of an object schema. The first property access loads the source and validates; the result is cached. Writes and deletes throw.
-- **`validateAll()`** validates every registered schema now and throws one error listing all failures.
-- **`assertOnlyKnownTopKeys()`** throws if the raw config has top-level keys that no registered object schema declares. A schema that takes arbitrary keys (a record, a loose object) turns the check off. Use it in single-schema apps together with `validateAll()`; skip it when several modules share one file.
 - **`onChange(callback)`** subscribes to `source.watch`. On change the loader drops its caches before calling subscribers. Destructured values keep their old value.
-- **`loadRaw()`** returns the cached raw value without validation; **`reset()`** drops every cache.
+- **`loadRaw()`** returns the cached raw value without validation, `undefined` when the source is empty; **`reset()`** drops every cache.
+
+An empty source fails on first access with `Config not found in <describe()>`. The loader serves many consumers of one file, so it validates lazily and ignores keys other schemas own. For one schema that must hold at startup, use `resolveConfig` below.
 
 Validation errors name the schema and the source:
 
@@ -93,10 +98,12 @@ Checking unknown keys and listing the fields of `buildConfig` need the schema's 
 
 ### Composition
 
-- **`firstNonEmpty(sources)`** returns the first value that is not `undefined` or `null`; `{}` counts as a value. Throws with every source's `describe()` when all are empty.
-- **`mergeAll(sources)`** deep-merges values left to right: objects merge recursively, arrays and scalars are replaced, empty sources are skipped. Returns `undefined` when all are empty, so it composes with `firstNonEmpty`.
+- **`firstNonEmpty(sources)`** returns the first config whose value is not `undefined` or `null`; `{}` counts as a value. Returns `undefined` when all are empty.
+- **`mergeAll(sources)`** deep-merges values left to right: objects merge recursively, arrays and scalars are replaced, empty sources are skipped. The result names every contributing source (`env A + env B`). Returns `undefined` when all are empty.
+- **`requiredSource(source, section?)`** wraps a source so that an empty one throws a `missing` error; `requireConfig(source, section?)` loads it once.
 - **`createInMemorySource(value, origin?)`** holds a value for tests and dev; `set(next)` replaces it and notifies watchers.
-- **`parseOrThrow(schema, raw, origin, { name?, knownKeys?, unknownKeys? })`** validates once with the same error format, for eager checks outside a loader.
+- **`resolveConfig(schema, { source, name, knownKeys?, unknownKeys? })`** loads a source, requires a value and validates it eagerly. With `knownKeys`, top-level keys outside the list fail (`unknownKeys: 'strict'`), log (`'warn'`) or pass (`'ignore'`, the default).
+- **`parseOrThrow(schema, { raw, source }, options)`** validates an already loaded config with the same error format.
 
 Failures are `ConfigKitError`s with `kind` (`missing`, `placeholder`, `parse`, `schema`), `section` and `source`.
 
@@ -106,21 +113,23 @@ Failures are `ConfigKitError`s with `kind` (`missing`, `placeholder`, `parse`, `
 - `createFileSource({ path, parser })` reads and parses a file; a missing file yields `undefined`.
 - `createYamlEnvSource({ envVar, yamlFile, yamlPath? })` is `firstNonEmpty` over the env var and a YAML file, taken from `yamlPath` or found upward from `process.cwd()`.
 - `createYamlConfigLoader(options)` wraps `createYamlEnvSource` in a loader.
+- `createServerEnvSource({ publicEnvVar, privateEnvVar })` merges the private env var over the required public one, as SSR server config does.
 - `yamlParser` and `jsonParser` plug into any source that takes a parser.
 
 ## Browser source
 
-`createJsonScriptSource({ elementId = '__CONFIG__' })` parses the JSON inside `<script type="application/json" id="__CONFIG__">`. A missing element or empty text yields `undefined`.
+`createJsonScriptSource({ elementId = '__CONFIG__', placeholder? })` parses the JSON inside `<script type="application/json" id="__CONFIG__">`. A missing element or empty text yields `undefined`; text equal to `placeholder` throws a `placeholder` error, so an unsubstituted `${APP_PUBLIC_CONFIG}` is told apart from broken JSON.
 
 ```ts
-import { createSyncConfigLoader } from '@yoshintame/config-kit'
+import { resolveConfig } from '@yoshintame/config-kit'
 import { createJsonScriptSource } from '@yoshintame/config-kit/browser'
 
-const loader = createSyncConfigLoader(createJsonScriptSource())
-export const config = loader.defineConfig(publicConfigSchema)
-
-loader.validateAll()
-loader.assertOnlyKnownTopKeys()
+export const config = resolveConfig(publicConfigSchema, {
+  source: createJsonScriptSource(),
+  name: 'public',
+  knownKeys: ['backend'],
+  unknownKeys: 'strict',
+})
 ```
 
 With the Vite plugin, read `publicConfig` from `virtual:config-kit` instead.
@@ -182,7 +191,7 @@ export default defineConfig(({ command }) => {
 })
 ```
 
-The plugin finds `config-kit.config.ts` in the Vite root; `configKit({ configFile })` points it elsewhere. `loadDevConfig(config)` reads the same files as the dev server and returns the validated server config, typed from the schemas.
+The plugin finds `config-kit.config.ts` in the Vite root; `configKit({ configFile })` points it elsewhere. `loadDevConfig(config, { root? })` reads the same files as the dev server and returns the validated server config, typed from the schemas. It searches from `process.cwd()`; pass `root` when `vite.config` sets a different Vite root.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -191,7 +200,7 @@ The plugin finds `config-kit.config.ts` in the Vite root; `configKit({ configFil
 | `schemas.build` | none | Build-time values inlined into the bundle |
 | `onInvalid` | default screen | Reaction to invalid config in the browser, see below |
 | `unknownKeys` | `'strict'` | Top-level keys no schema declares: `'strict'` fails, `'warn'` logs, `'ignore'` skips the check. Applies to every section |
-| `sensitive` | `[]` | Paths under `build` that may hold secrets in dev, see below |
+| `sensitive` | `[]` | Paths under `build.` or `private.` that hold secrets, see below |
 | `dev` | | `yamlFile`, `yamlPath`, `localYamlFile`, `overlayEnvVar`, `watch`, `hmr`, `serverRestart`, `fullReload` |
 | `docker` | `false` | Emit the container validator and nginx hook |
 | `envVars` | `APP_PUBLIC_CONFIG`, `APP_PRIVATE_CONFIG`, `APP_BUILD_CONFIG` | Names of the three env vars |
@@ -252,7 +261,7 @@ Without `onInvalid` the plugin shows the error text in `#root` (or `<body>`) and
 | Handler | Result |
 | --- | --- |
 | Returns nothing | The app stops; the screen is up to the handler |
-| Returns a config | It is validated and the app runs with it |
+| Returns a config | It is validated and the app runs with it; if it is invalid too, the default screen shows both errors |
 | Calls `renderDefault()` | The default screen |
 
 ```ts
@@ -266,9 +275,9 @@ onInvalid(error, { kind, section, source, renderDefault }) {
 
 ### Secrets
 
-`private` never reaches the browser. Values in `build` are inlined into the bundle, so paths listed in `sensitive` (dev tokens, impersonation) are allowed only in `vite serve`: `vite build` fails when one of them is set.
+`private` never reaches the browser. Values in `build` are inlined into the bundle, so `build.` paths listed in `sensitive` (dev tokens, impersonation) are allowed only in `vite serve`: `vite build` fails when one of them is set. `buildConfig` values must be JSON.
 
-After a client build the plugin searches the emitted chunks and assets for string values of `private` and of `sensitive` paths, taken from `config.yaml` and its overlays when present and from `APP_PRIVATE_CONFIG` and `APP_BUILD_CONFIG`, and fails the build naming the path and the chunk. Values shorter than 8 characters and values that also appear in `public` are skipped. Dev-server responses are not scanned.
+After a client build the plugin searches the emitted chunks and assets for the string values of every `sensitive` path, taken from `config.yaml` and its overlays when present and from `APP_PRIVATE_CONFIG` / `APP_BUILD_CONFIG`, and fails the build naming the path and the chunk, never the value. Only paths marked sensitive are scanned: ordinary private values such as hosts or environment names legitimately appear in bundles. Dev-server responses are not scanned.
 
 The build also fails when `index.html` lost the `${APP_PUBLIC_CONFIG}` placeholder, for example to a plugin that rewrites the HTML.
 
@@ -289,10 +298,10 @@ A production build leaves this in `index.html`:
 <script type="application/json" id="__CONFIG__">${APP_PUBLIC_CONFIG}</script>
 ```
 
-With `docker: true`, `vite build` also writes `dist-config/`:
+With `docker: true`, a successful client build also writes `dist-config/`:
 
 - `validate.mjs`: a self-contained validator (public schema, schema library and core bundled, `onInvalid` left out) that checks `APP_PUBLIC_CONFIG` like the browser does and exits with 1 and the error. Runs with `node` or `bun`, no `node_modules`.
-- `docker-entrypoint.d/40-config-kit-inject.sh`: a hook for the official nginx image entrypoint. On every start it requires a non-empty `APP_PUBLIC_CONFIG`, escapes `<` so the JSON cannot close the script element, and renders `index.html` with `envsubst` from a template kept outside the docroot.
+- `docker-entrypoint.d/40-config-kit-inject.sh`: a hook for the official nginx image entrypoint. On every start it requires a set, non-empty `APP_PUBLIC_CONFIG`, escapes `<` so the JSON cannot close the script element, and renders `index.html` with `envsubst` from a template kept outside the docroot.
 
 ```dockerfile
 FROM node:22-alpine AS config-validator

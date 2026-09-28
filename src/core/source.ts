@@ -1,7 +1,12 @@
-import { ConfigKitError } from './errors'
+import { ConfigErrorKind, ConfigKitError } from './errors'
+
+export interface RawConfig {
+  raw: unknown
+  source: string
+}
 
 export interface SyncConfigSource {
-  loadSync(): unknown
+  loadSync(): RawConfig | undefined
   describe(): string
   watch?(onChange: () => void): () => void
 }
@@ -16,13 +21,21 @@ export const jsonParser: Parser = {
   parse: (input) => JSON.parse(input),
 }
 
-export function parseWith(parser: Parser, input: string, origin: string) {
+export function parseWith({
+  parser,
+  input,
+  source,
+}: {
+  parser: Parser
+  input: string
+  source: string
+}): RawConfig {
   try {
-    return parser.parse(input)
+    return { raw: parser.parse(input), source }
   } catch (error) {
     throw new ConfigKitError(
-      `Failed to parse ${origin}: ${errorMessage(error)}`,
-      { kind: 'parse', section: undefined, source: origin },
+      `Failed to parse ${source}: ${errorMessage(error)}`,
+      { kind: ConfigErrorKind.Parse, section: undefined, source },
       { cause: error },
     )
   }

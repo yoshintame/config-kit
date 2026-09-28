@@ -1,17 +1,19 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { isEqual } from 'es-toolkit'
-import { match } from 'ts-pattern'
+import { isEqual, union } from 'es-toolkit'
+import { match, P } from 'ts-pattern'
 import type { ModuleNode, Plugin, ResolvedConfig, ViteDevServer } from 'vite'
 
+import { errorMessage, Section } from '../core'
+import { collectSecrets, findBuildProblems, type Secret } from './build-checks'
 import { changedPaths, matchesAny } from './changed-paths'
 import { transformConfigFile } from './client-split'
 import { type ConfigFile, importConfigFile } from './config-file'
 import {
-  BUILD_MODULE_ID,
-  PRIVATE_MODULE_ID,
-  PUBLIC_MODULE_ID,
+  configModulesBySection,
+  envPlaceholder,
+  PACKAGE_NAME,
 } from './constants'
 import {
   createDevReader,
@@ -20,64 +22,78 @@ import {
   loadBuildConfig,
 } from './dev-reader'
 import { writeDockerArtifacts } from './docker'
-import { collectSecrets, findLeaks, type Secret } from './leaks'
-import {
-  buildConfigModule,
-  buildModule,
-  type ConfigModuleKind,
-  devModule,
-} from './virtual-modules'
+import { resolveGeneratedImport } from './generated-imports'
+import { buildConfigModule, buildModule, devModule } from './virtual-modules'
 
 export interface ConfigKitOptions {
   configFile?: string
 }
 
-type Reaction = 'none' | 'restart' | 'full-reload' | 'hmr'
-type ModuleKind = ConfigModuleKind | 'build'
-
-const RESOLVED_IDS: Record<ModuleKind, string> = {
-  public: '\0config-kit:public',
-  server: '\0config-kit:private',
-  build: '\0config-kit:build',
+interface ServeMode {
+  command: 'serve'
+  reader: DevReader
+  state: DevState
+  failed: boolean
 }
+
+interface BuildMode {
+  command: 'build'
+  buildConfig: unknown
+  secrets: Secret[]
+}
+
+type Mode = ServeMode | BuildMode
+
+enum Reaction {
+  None = 'none',
+  Restart = 'restart',
+  FullReload = 'full-reload',
+  Hmr = 'hmr',
+}
+
 const PLUGIN_FILE = fileURLToPath(import.meta.url)
 
 export function configKit({ configFile }: ConfigKitOptions = {}): Plugin {
   let loaded: ConfigFile
   let resolved: ResolvedConfig
-  let dev: { reader: DevReader; state: DevState } | undefined
-  let buildConfig: unknown
-  let secrets: Secret[] = []
-  let failed = false
+  let mode: Mode
 
-  async function handleChange(server: ViteDevServer) {
-    if (!dev) return
+  async function handleChange(server: ViteDevServer, dev: ServeMode) {
     const next = tryLoad(dev.reader, server)
     if (!next) {
-      failed = true
+      dev.failed = true
       return
     }
-    const { serverRestart, fullReload, hmr } = loaded.settings.dev
     const reaction = reactionFor({
       previous: dev.state,
       next,
-      recovered: failed,
-      serverRestart,
-      fullReload,
-      hmr,
+      recovered: dev.failed,
+      settings: loaded.settings.dev,
     })
     dev.state = next
-    failed = false
+    dev.failed = false
     await match(reaction)
-      .with('none', () => undefined)
-      .with('restart', () => server.restart())
-      .with('full-reload', () => fullReloadConfig(server))
-      .with('hmr', () => hotReloadConfig(server))
+      .with(Reaction.None, () => undefined)
+      .with(Reaction.Restart, () => server.restart())
+      .with(Reaction.FullReload, () => fullReloadConfig(server))
+      .with(Reaction.Hmr, () => hotReloadConfig(server))
       .exhaustive()
   }
 
-  function isClientBuild() {
-    return !dev && !resolved.build.ssr
+  function clientBuild(): BuildMode | undefined {
+    return match(mode)
+      .with({ command: 'build' }, (build) =>
+        resolved.build.ssr ? undefined : build,
+      )
+      .otherwise(() => undefined)
+  }
+
+  function watchedServe(): ServeMode | undefined {
+    return match(mode)
+      .with({ command: 'serve' }, (serve) =>
+        loaded.settings.dev.watch ? serve : undefined,
+      )
+      .otherwise(() => undefined)
   }
 
   return {
@@ -91,12 +107,27 @@ export function configKit({ configFile }: ConfigKitOptions = {}): Plugin {
         configFile,
         alias: userConfig.resolve?.alias,
       })
-      if (env.command === 'serve') {
-        const reader = createDevReader(loaded.settings, root)
-        dev = { reader, state: reader.load() }
-      } else {
-        buildConfig = loadBuildConfig(loaded.settings)
-        secrets = collectSecrets(loaded.settings, root)
+      mode = match(env.command)
+        .returnType<Mode>()
+        .with('serve', () => {
+          const reader = createDevReader(loaded.settings, root)
+          return {
+            command: 'serve',
+            reader,
+            state: reader.load(),
+            failed: false,
+          }
+        })
+        .with('build', () => ({
+          command: 'build',
+          buildConfig: loadBuildConfig(loaded.settings),
+          secrets: collectSecrets(loaded.settings, root),
+        }))
+        .exhaustive()
+      return {
+        optimizeDeps: {
+          include: [PACKAGE_NAME, `${PACKAGE_NAME}/browser`],
+        },
       }
     },
 
@@ -105,80 +136,128 @@ export function configKit({ configFile }: ConfigKitOptions = {}): Plugin {
     },
 
     configureServer(server) {
-      if (!loaded.settings.dev.watch || !dev) return
+      const dev = watchedServe()
+      if (!dev) return
       const configFiles = new Set(dev.reader.watchedFiles)
       const schemaFiles = new Set(loaded.dependencies)
       server.watcher.add([...configFiles, ...schemaFiles])
-      const onFile = (file: string) => {
-        const changed = path.resolve(file)
-        if (schemaFiles.has(changed)) void server.restart()
-        else if (configFiles.has(changed)) void handleChange(server)
+      const onFile = (file: string) =>
+        match(path.resolve(file))
+          .when(
+            (changed) => schemaFiles.has(changed),
+            () => void server.restart(),
+          )
+          .when(
+            (changed) => configFiles.has(changed),
+            () => void handleChange(server, dev),
+          )
+          .otherwise(() => undefined)
+      for (const event of ['change', 'add', 'unlink'] as const) {
+        server.watcher.on(event, onFile)
       }
-      server.watcher.on('change', onFile)
-      server.watcher.on('add', onFile)
-      server.watcher.on('unlink', onFile)
     },
 
     resolveId(id, importer, options) {
-      return match(id)
-        .with(PUBLIC_MODULE_ID, () => RESOLVED_IDS.public)
-        .with(PRIVATE_MODULE_ID, () =>
+      const section = sectionOfId(id)
+      return match({ section, fromGenerated: isGeneratedModule(importer) })
+        .with({ section: Section.Server }, () =>
           options?.ssr
-            ? RESOLVED_IDS.server
-            : this.error(`${PRIVATE_MODULE_ID} is server-only`),
-        )
-        .with(BUILD_MODULE_ID, () =>
-          loaded.settings.definition.schemas.build
-            ? RESOLVED_IDS.build
+            ? configModulesBySection[Section.Server].resolvedId
             : this.error(
-                `${BUILD_MODULE_ID} needs schemas.build in ${loaded.file}`,
+                `${configModulesBySection[Section.Server].id} is server-only`,
               ),
         )
-        .when(
-          () => isVirtualModule(importer),
-          () =>
-            id === loaded.file
-              ? id
-              : this.resolve(id, PLUGIN_FILE, { ...options, skipSelf: true }),
+        .with({ section: Section.Build }, () =>
+          loaded.settings.definition.schemas.build
+            ? configModulesBySection[Section.Build].resolvedId
+            : this.error(
+                `${configModulesBySection[Section.Build].id} needs schemas.build in ${loaded.configPath}`,
+              ),
+        )
+        .with(
+          { section: Section.Public },
+          () => configModulesBySection[Section.Public].resolvedId,
+        )
+        .with({ fromGenerated: true }, () =>
+          resolveGeneratedImport(this, {
+            id,
+            configPath: loaded.configPath,
+            pluginFile: PLUGIN_FILE,
+            options,
+          }),
         )
         .otherwise(() => null)
     },
 
     load(id, options) {
-      const kind = moduleKindOf(id)
-      if (!kind) return
-      const { settings } = loaded
-      if (kind === 'build') {
-        return buildConfigModule(
-          dev ? dev.state.buildConfig : buildConfig,
-          settings.buildShape,
+      const section = sectionOfResolvedId(id)
+      if (section === undefined) return undefined
+      const { settings, configPath } = loaded
+      return match({ section, mode })
+        .with(
+          { section: Section.Build, mode: { command: 'serve' } },
+          ({ mode }) =>
+            buildConfigModule(mode.state.buildConfig, settings.buildShape),
         )
-      }
-      const target = { kind, configFile: loaded.file, settings }
-      return dev
-        ? devModule({
-            ...target,
-            loaded: dev.state[kind],
-            hmr: settings.dev.hmr,
-          })
-        : buildModule({ ...target, ssr: options?.ssr === true })
+        .with(
+          { section: Section.Build, mode: { command: 'build' } },
+          ({ mode }) =>
+            buildConfigModule(mode.buildConfig, settings.buildShape),
+        )
+        .with(
+          {
+            section: P.union(Section.Public, Section.Server),
+            mode: { command: 'serve' },
+          },
+          ({ section, mode }) =>
+            devModule({
+              section,
+              configPath,
+              settings,
+              loaded:
+                section === Section.Public
+                  ? mode.state.public
+                  : mode.state.server,
+              hmr: settings.dev.hmr,
+            }),
+        )
+        .with(
+          {
+            section: P.union(Section.Public, Section.Server),
+            mode: { command: 'build' },
+          },
+          ({ section }) =>
+            buildModule({
+              section,
+              configPath,
+              settings,
+              ssr: options?.ssr === true,
+            }),
+        )
+        .exhaustive()
     },
 
     transform: {
       order: 'post',
       handler(code, id, options) {
-        if (options?.ssr || id.split('?')[0] !== loaded.file) return
-        return transformConfigFile(this, code, { keepOnInvalid: true })
+        return transformConfigFile(this, {
+          code,
+          id,
+          ssr: options?.ssr === true,
+          configPath: loaded.configPath,
+          keepOnInvalid: true,
+          skipSsr: true,
+        })
       },
     },
 
     transformIndexHtml() {
-      if (dev) return
+      if (mode.command === 'serve') return
       return [
         {
           tag: 'script',
           attrs: { type: 'application/json', id: loaded.settings.elementId },
-          children: placeholder(loaded.settings.envVars.public),
+          children: envPlaceholder(loaded.settings.envVars.public),
           injectTo: 'head-prepend',
         },
       ]
@@ -187,37 +266,24 @@ export function configKit({ configFile }: ConfigKitOptions = {}): Plugin {
     generateBundle: {
       order: 'post',
       handler(_options, bundle) {
-        if (!isClientBuild()) return
-        const expected = placeholder(loaded.settings.envVars.public)
-        const pages = Object.values(bundle).filter(
-          (output) =>
-            output.type === 'asset' && output.fileName.endsWith('.html'),
-        )
-        const missing = pages.filter(
-          (page) =>
-            page.type === 'asset' && !String(page.source).includes(expected),
-        )
-        if (missing.length > 0) {
-          this.error(
-            `${missing.map((page) => page.fileName).join(', ')} lost the ${expected} placeholder: the container cannot inject the config. Check plugins that rewrite index.html`,
-          )
-        }
-        const leaks = findLeaks(bundle, secrets)
-        if (leaks.length > 0) {
-          this.error(
-            `Private or sensitive config values found in the bundle: ${leaks.join(', ')}`,
-          )
-        }
+        const build = clientBuild()
+        if (!build) return
+        const problems = findBuildProblems(bundle, {
+          secrets: build.secrets,
+          publicEnvVar: loaded.settings.envVars.public,
+        })
+        if (problems.length > 0) this.error(problems.join('\n'))
       },
     },
 
-    async closeBundle() {
-      if (!loaded.settings.docker || !isClientBuild()) return
+    async writeBundle() {
+      const build = loaded.settings.docker ? clientBuild() : undefined
+      if (!build) return
       await writeDockerArtifacts({
         root: resolved.root,
         mode: resolved.mode,
         alias: resolved.resolve.alias,
-        configFile: loaded.file,
+        configPath: loaded.configPath,
         settings: loaded.settings,
         pluginFile: PLUGIN_FILE,
       })
@@ -225,15 +291,14 @@ export function configKit({ configFile }: ConfigKitOptions = {}): Plugin {
   }
 }
 
-function placeholder(envVar: string): string {
-  return `\${${envVar}}`
-}
-
-function tryLoad(reader: DevReader, server: ViteDevServer) {
+function tryLoad(
+  reader: DevReader,
+  server: ViteDevServer,
+): DevState | undefined {
   try {
     return reader.load()
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = errorMessage(error)
     server.config.logger.error(message, { timestamp: true })
     server.ws.send({ type: 'error', err: { message, stack: '' } })
     return undefined
@@ -244,36 +309,39 @@ function reactionFor({
   previous,
   next,
   recovered,
-  serverRestart,
-  fullReload,
-  hmr,
+  settings: { serverRestart, fullReload, hmr },
 }: {
   previous: DevState
   next: DevState
   recovered: boolean
-  serverRestart: string[]
-  fullReload: string[]
-  hmr: boolean
+  settings: { serverRestart: string[]; fullReload: string[]; hmr: boolean }
 }): Reaction {
-  const paths = changedPaths(previous.server.raw, next.server.raw)
+  const paths = union(
+    changedPaths(previous.public.raw, next.public.raw),
+    changedPaths(previous.server.raw, next.server.raw),
+  )
   const touches = (patterns: string[]) =>
     paths.some((changed) => matchesAny(changed, patterns))
   return match({
-    buildChanged: !isEqual(previous.build.raw, next.build.raw),
+    buildChanged: !isEqual(previous.build?.raw, next.build?.raw),
     restart: touches(serverRestart),
-    reload: !hmr || touches(fullReload),
-    changed: paths.length > 0 || recovered,
+    reload: hmr ? touches(fullReload) : true,
+    changed: paths.length > 0 ? true : recovered,
   })
     .returnType<Reaction>()
-    .with({ buildChanged: true }, { restart: true }, () => 'restart')
-    .with({ changed: false }, () => 'none')
-    .with({ reload: true }, () => 'full-reload')
-    .otherwise(() => 'hmr')
+    .with({ buildChanged: true }, { restart: true }, () => Reaction.Restart)
+    .with({ changed: false }, () => Reaction.None)
+    .with({ reload: true }, () => Reaction.FullReload)
+    .otherwise(() => Reaction.Hmr)
 }
 
 function configModules(server: ViteDevServer): ModuleNode[] {
-  return [RESOLVED_IDS.public, RESOLVED_IDS.server]
-    .map((id) => server.moduleGraph.getModuleById(id))
+  return [Section.Public, Section.Server]
+    .map((section) =>
+      server.moduleGraph.getModuleById(
+        configModulesBySection[section].resolvedId,
+      ),
+    )
     .filter((mod) => mod !== undefined)
 }
 
@@ -288,12 +356,18 @@ async function hotReloadConfig(server: ViteDevServer) {
   for (const mod of configModules(server)) await server.reloadModule(mod)
 }
 
-function isVirtualModule(id: string | undefined): boolean {
-  return Object.values(RESOLVED_IDS).includes(id ?? '')
+function sectionOfId(id: string): Section | undefined {
+  return Object.values(Section).find(
+    (section) => configModulesBySection[section].id === id,
+  )
 }
 
-function moduleKindOf(id: string): ModuleKind | undefined {
-  return (Object.keys(RESOLVED_IDS) as ModuleKind[]).find(
-    (kind) => RESOLVED_IDS[kind] === id,
+function sectionOfResolvedId(id: string): Section | undefined {
+  return Object.values(Section).find(
+    (section) => configModulesBySection[section].resolvedId === id,
   )
+}
+
+function isGeneratedModule(id: string | undefined): boolean {
+  return sectionOfResolvedId(id ?? '') !== undefined
 }

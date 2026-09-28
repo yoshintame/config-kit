@@ -11,13 +11,13 @@ export function createFileSource({
   path,
   parser,
 }: FileSourceOptions): SyncConfigSource {
-  const origin = `file ${path}`
+  const source = `file ${path}`
 
   return {
-    loadSync() {
-      if (!existsSync(path)) return undefined
-      return parseWith(parser, readFileSync(path, 'utf-8'), origin)
-    },
-    describe: () => origin,
+    loadSync: () =>
+      existsSync(path)
+        ? parseWith({ parser, input: readFileSync(path, 'utf-8'), source })
+        : undefined,
+    describe: () => source,
   }
 }

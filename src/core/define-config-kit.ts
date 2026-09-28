@@ -3,6 +3,12 @@ import type { ObjectSchema } from './loader'
 import type { UnknownKeys } from './parse-or-throw'
 import type { StandardSchemaV1 } from './standard-schema'
 
+export enum Section {
+  Public = 'public',
+  Server = 'server',
+  Build = 'build',
+}
+
 export interface ConfigKitSchemas {
   public: ObjectSchema
   server?: ObjectSchema
@@ -10,7 +16,7 @@ export interface ConfigKitSchemas {
 }
 
 export interface InvalidConfigContext {
-  kind: ConfigErrorKind
+  kind: `${ConfigErrorKind}`
   section: string
   source: string
   renderDefault(): void
@@ -33,6 +39,8 @@ export interface EnvVarNames {
   build?: string
 }
 
+export type SensitivePath = `build.${string}` | `private.${string}`
+
 export interface ConfigKitDefinition<
   S extends ConfigKitSchemas = ConfigKitSchemas,
 > {
@@ -40,9 +48,10 @@ export interface ConfigKitDefinition<
   onInvalid?: (
     error: ConfigKitError,
     context: InvalidConfigContext,
-  ) => StandardSchemaV1.InferInput<S['public']> | undefined | void
-  unknownKeys?: UnknownKeys
-  sensitive?: `build.${string}`[]
+    // biome-ignore lint/suspicious/noConfusingVoidType: a handler without a return statement returns void
+  ) => StandardSchemaV1.InferInput<S['public']> | void
+  unknownKeys?: `${UnknownKeys}`
+  sensitive?: SensitivePath[]
   dev?: DevOptions
   docker?: boolean
   envVars?: EnvVarNames
@@ -55,7 +64,24 @@ export function defineConfigKit<S extends ConfigKitSchemas>(
   return definition
 }
 
+// biome-ignore lint/suspicious/noEmptyInterface: the app augments it with its config
 export interface Register {}
+
+export type PublicConfig = StandardSchemaV1.InferOutput<
+  RegisteredSchemas['public']
+>
+
+export type ServerConfig = ServerConfigOf<RegisteredSchemas>
+
+export type BuildConfig = OutputOr<
+  SchemaAt<RegisteredSchemas, Section.Build>,
+  Record<never, never>
+>
+
+export type ServerConfigOf<S extends ConfigKitSchemas> = OutputOr<
+  SchemaAt<S, Section.Server>,
+  StandardSchemaV1.InferOutput<S['public']>
+>
 
 type RegisteredSchemas = Register extends {
   config: { schemas: infer S extends ConfigKitSchemas }
@@ -63,22 +89,12 @@ type RegisteredSchemas = Register extends {
   ? S
   : ConfigKitSchemas
 
-type OutputOr<S, Fallback> = S extends ObjectSchema
-  ? StandardSchemaV1.InferOutput<S>
+type SchemaAt<S, K extends string> = S extends {
+  [P in K]: infer X extends ObjectSchema
+}
+  ? X
+  : undefined
+
+type OutputOr<X, Fallback> = X extends ObjectSchema
+  ? StandardSchemaV1.InferOutput<X>
   : Fallback
-
-export type PublicConfig = StandardSchemaV1.InferOutput<
-  RegisteredSchemas['public']
->
-
-export type ServerConfig = OutputOr<RegisteredSchemas['server'], PublicConfig>
-
-export type BuildConfig = OutputOr<
-  RegisteredSchemas['build'],
-  Record<string, never>
->
-
-export type ServerConfigOf<S extends ConfigKitSchemas> = OutputOr<
-  S['server'],
-  StandardSchemaV1.InferOutput<S['public']>
->

@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { z } from 'zod'
 
-import { ConfigKitError } from '../core'
-import { readConfigScript, resolvePublicConfig } from './public-config'
+import {
+  type ConfigKitDefinition,
+  ConfigKitError,
+  createInMemorySource,
+} from '../core'
+import { createJsonScriptSource } from './json-script-source'
+import { resolvePublicConfig } from './public-config'
 
 const schema = z.object({ apiUrl: z.string() })
 const ENV_VAR = 'APP_PUBLIC_CONFIG'
@@ -26,39 +31,36 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function resolve(
-  onInvalid?: Parameters<typeof resolvePublicConfig>[0]['config']['onInvalid'],
-) {
-  return resolvePublicConfig({
-    config: { schemas: { public: schema }, onInvalid },
-    read: () => readConfigScript('__CONFIG__', 'APP_PUBLIC_CONFIG'),
-    knownKeys: ['apiUrl'],
-    unknownKeys: 'strict',
-  })
+function resolve(onInvalid?: ConfigKitDefinition['onInvalid']) {
+  return resolvePublicConfig(
+    { schemas: { public: schema }, onInvalid },
+    {
+      source: createJsonScriptSource({ placeholder: PLACEHOLDER }),
+      knownKeys: ['apiUrl'],
+      unknownKeys: 'strict',
+    },
+  )
 }
-
-describe('readConfigScript', () => {
-  test.each([
-    ['missing', null, 'missing'],
-    ['empty', ' ', 'missing'],
-    ['placeholder', PLACEHOLDER, 'placeholder'],
-    ['broken JSON', '{', 'parse'],
-  ])('classifies a %s element', (_, text, kind) => {
-    stubDocument(text)
-    expect(() => readConfigScript('__CONFIG__', 'APP_PUBLIC_CONFIG')).toThrow(
-      expect.objectContaining({
-        kind,
-        section: 'public',
-        source: 'script#__CONFIG__',
-      }),
-    )
-  })
-})
 
 describe('resolvePublicConfig', () => {
   test('returns the validated config', () => {
     stubDocument('{"apiUrl":"/api"}')
     expect(resolve()).toEqual({ apiUrl: '/api' })
+  })
+
+  test.each([
+    ['missing', null],
+    ['placeholder', PLACEHOLDER],
+    ['parse', '{'],
+    ['schema', '{"apiUrl":1}'],
+  ])('passes the %s kind to onInvalid', (kind, text) => {
+    stubDocument(text)
+    const onInvalid = vi.fn()
+    expect(() => resolve(onInvalid)).toThrow(ConfigKitError)
+    expect(onInvalid).toHaveBeenCalledWith(
+      expect.any(ConfigKitError),
+      expect.objectContaining({ kind, section: 'public' }),
+    )
   })
 
   test('renders the default screen and halts without onInvalid', () => {
@@ -67,18 +69,9 @@ describe('resolvePublicConfig', () => {
     expect(root.replaceChildren).toHaveBeenCalledOnce()
   })
 
-  test('halts when onInvalid returns nothing', () => {
+  test('halts without rendering when onInvalid returns nothing', () => {
     const root = stubDocument(PLACEHOLDER)
-    const onInvalid = vi.fn()
-    expect(() => resolve(onInvalid)).toThrow(/placeholder/)
-    expect(onInvalid).toHaveBeenCalledWith(
-      expect.any(ConfigKitError),
-      expect.objectContaining({
-        kind: 'placeholder',
-        section: 'public',
-        source: 'script#__CONFIG__',
-      }),
-    )
+    expect(() => resolve(() => undefined)).toThrow(/placeholder/)
     expect(root.replaceChildren).not.toHaveBeenCalled()
   })
 
@@ -99,18 +92,17 @@ describe('resolvePublicConfig', () => {
     })
   })
 
-  test('validates the returned config', () => {
-    stubDocument('{"apiUrl":1}')
+  test('shows both errors when the returned config is invalid too', () => {
+    const root = stubDocument('{"apiUrl":1}')
     expect(() => resolve(() => ({ apiUrl: 2 }) as never)).toThrow(
-      /loaded from onInvalid/,
+      /loaded from script#__CONFIG__[\s\S]*invalid too[\s\S]*loaded from onInvalid/,
     )
+    expect(root.replaceChildren).toHaveBeenCalledOnce()
   })
 
   test('treats unknown keys as invalid', () => {
     stubDocument('{"apiUrl":"/api","typo":1}')
-    const onInvalid = vi.fn()
-    expect(() => resolve(onInvalid)).toThrow(/Unknown top-level config keys/)
-    expect(onInvalid.mock.calls[0]?.[1]).toMatchObject({ kind: 'schema' })
+    expect(() => resolve(vi.fn())).toThrow(/Unknown top-level config keys/)
   })
 
   test('halts when onInvalid returns a promise', () => {
@@ -120,12 +112,17 @@ describe('resolvePublicConfig', () => {
 
   test('rethrows errors that are not config errors', () => {
     expect(() =>
-      resolvePublicConfig({
-        config: { schemas: { public: schema } },
-        read: () => {
-          throw new TypeError('boom')
+      resolvePublicConfig(
+        { schemas: { public: schema } },
+        {
+          source: {
+            ...createInMemorySource(undefined),
+            loadSync: () => {
+              throw new TypeError('boom')
+            },
+          },
         },
-      }),
+      ),
     ).toThrow(TypeError)
   })
 })

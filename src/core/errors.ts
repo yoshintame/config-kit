@@ -1,18 +1,23 @@
-export type ConfigErrorKind = 'missing' | 'placeholder' | 'parse' | 'schema'
+export enum ConfigErrorKind {
+  Missing = 'missing',
+  Placeholder = 'placeholder',
+  Parse = 'parse',
+  Schema = 'schema',
+}
 
 export interface ConfigErrorDetails {
-  kind: ConfigErrorKind
+  kind: `${ConfigErrorKind}`
   section: string | undefined
   source: string
 }
 
 export class ConfigKitError extends Error {
-  override readonly name = 'ConfigKitError'
-  readonly kind: ConfigErrorKind
-  readonly section: string | undefined
-  readonly source: string
+  public override readonly name = 'ConfigKitError'
+  public readonly kind: `${ConfigErrorKind}`
+  public readonly section: string | undefined
+  public readonly source: string
 
-  constructor(
+  public constructor(
     message: string,
     { kind, section, source }: ConfigErrorDetails,
     options?: ErrorOptions,

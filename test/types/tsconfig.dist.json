@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "skipLibCheck": false,
+    "paths": {
+      "@yoshintame/config-kit": ["../../dist/index.d.ts"]
+    }
+  },
+  "include": ["src", "*.config.ts"]
+}

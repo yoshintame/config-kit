@@ -14,14 +14,15 @@ export function createProcessEnvSource({
   envVar,
   parser = jsonParser,
 }: ProcessEnvSourceOptions): SyncConfigSource {
-  const origin = `env ${envVar}`
+  const source = `env ${envVar}`
 
   return {
     loadSync() {
-      const value = process.env[envVar]
-      if (value === undefined) return undefined
-      return parseWith(parser, value, origin)
+      const input = process.env[envVar]
+      return input === undefined
+        ? undefined
+        : parseWith({ parser, input, source })
     },
-    describe: () => origin,
+    describe: () => source,
   }
 }

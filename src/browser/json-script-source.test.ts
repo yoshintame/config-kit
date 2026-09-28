@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import z from 'zod'
 
-import { createSyncConfigLoader } from '../core'
 import { createJsonScriptSource } from './json-script-source'
 
 function stubScript(id: string, textContent: string | null) {
@@ -19,14 +17,20 @@ describe('createJsonScriptSource', () => {
   test('parses JSON from script#__CONFIG__ by default', () => {
     stubScript('__CONFIG__', '{"a":1}')
     const source = createJsonScriptSource()
-    expect(source.loadSync()).toEqual({ a: 1 })
+    expect(source.loadSync()).toEqual({
+      raw: { a: 1 },
+      source: 'script#__CONFIG__',
+    })
     expect(source.describe()).toBe('script#__CONFIG__')
   })
 
   test('reads a custom element id', () => {
     stubScript('app-config', '{"b":2}')
     const source = createJsonScriptSource({ elementId: 'app-config' })
-    expect(source.loadSync()).toEqual({ b: 2 })
+    expect(source.loadSync()).toEqual({
+      raw: { b: 2 },
+      source: 'script#app-config',
+    })
     expect(source.describe()).toBe('script#app-config')
   })
 
@@ -50,24 +54,12 @@ describe('createJsonScriptSource', () => {
     )
   })
 
-  test('feeds loader with fail-fast SPA validation', () => {
-    stubScript(
-      '__CONFIG__',
-      JSON.stringify({
-        backend: { apiUrl: 'https://api.example.com' },
-        extra: true,
-      }),
-    )
-    const loader = createSyncConfigLoader(createJsonScriptSource())
-    const config = loader.defineConfig(
-      z
-        .object({ backend: z.object({ apiUrl: z.url() }) })
-        .meta({ id: 'public' }),
-    )
-    expect(() => loader.validateAll()).not.toThrow()
-    expect(config.backend.apiUrl).toBe('https://api.example.com')
-    expect(() => loader.assertOnlyKnownTopKeys()).toThrow(
-      /\(loaded from script#__CONFIG__\): extra/,
+  test('reports an unsubstituted placeholder', () => {
+    const envVar = 'APP_PUBLIC_CONFIG'
+    const placeholder = `\${${envVar}}`
+    stubScript('__CONFIG__', ` ${placeholder} `)
+    expect(() => createJsonScriptSource({ placeholder }).loadSync()).toThrow(
+      expect.objectContaining({ kind: 'placeholder' }),
     )
   })
 })

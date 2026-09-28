@@ -1,36 +1,33 @@
 import path from 'node:path'
 
-import { isNil, isPlainObject } from 'es-toolkit'
+import { isNotNil, isPlainObject } from 'es-toolkit'
 import { get } from 'es-toolkit/compat'
 import { findUpSync } from 'find-up'
+import { match, P } from 'ts-pattern'
 
 import {
   type ConfigKitDefinition,
   type ConfigKitSchemas,
-  deepMerge,
+  createInMemorySource,
+  firstNonEmpty,
   mergeAll,
   parseOrThrow,
+  type RawConfig,
+  requireConfig,
+  Section,
   type ServerConfigOf,
-  type StandardSchemaV1,
   type SyncConfigSource,
 } from '../core'
+import { schemaFor } from '../core/resolve-config'
 import { createFileSource, createProcessEnvSource, yamlParser } from '../node'
-import {
-  type ConfigKitSettings,
-  resolveSettings,
-  type Section,
-} from './config-file'
-
-export interface LoadedConfig {
-  raw: unknown
-  origin: string
-}
+import { type ConfigKitSettings, resolveSettings } from './config-file'
+import { YamlSection } from './constants'
 
 export interface DevState {
-  public: LoadedConfig
-  server: LoadedConfig
+  public: RawConfig
+  server: RawConfig
   serverConfig: unknown
-  build: LoadedConfig
+  build: RawConfig | undefined
   buildConfig: unknown
 }
 
@@ -39,7 +36,7 @@ export interface DevReader {
   watchedFiles: string[]
 }
 
-const SECTIONS = ['public', 'private', 'build']
+type Warn = (message: string) => void
 
 export function loadDevConfig<S extends ConfigKitSchemas>(
   definition: ConfigKitDefinition<S>,
@@ -52,52 +49,70 @@ export function loadDevConfig<S extends ConfigKitSchemas>(
 export function createDevReader(
   settings: ConfigKitSettings,
   root: string,
-  warn: (message: string) => void = console.warn,
+  warn: Warn = console.warn,
 ): DevReader {
   const { yaml, watchedFiles } = yamlSource(settings, root)
   const { envVars } = settings
-  const publicEnv = createProcessEnvSource({ envVar: envVars.public })
-  const privateEnv = createProcessEnvSource({ envVar: envVars.private })
-  const buildEnv = createProcessEnvSource({ envVar: envVars.build })
-  const parse = sectionParser(settings, warn)
-  const { schemas } = settings.definition
 
   function load(): DevState {
-    const sections = yamlSections(yaml)
-    const inYaml = (key: string): LoadedConfig => ({
-      raw: sections[key],
-      origin: `${yaml.describe()} (${key})`,
+    const document = yamlDocument(yaml)
+    const sectionSource = (section: YamlSection, envVar: string) =>
+      firstNonEmpty([
+        createProcessEnvSource({ envVar }),
+        yamlSectionSource(document, section),
+      ])
+    const publicSource = sectionSource(YamlSection.Public, envVars.public)
+    const serverSource = mergeAll([
+      publicSource,
+      sectionSource(YamlSection.Private, envVars.private),
+    ])
+    const publicConfig = requireConfig(publicSource, Section.Public)
+    const server = requireConfig(serverSource, Section.Server)
+    const build = sectionSource(YamlSection.Build, envVars.build).loadSync()
+
+    parseSection({
+      settings,
+      section: Section.Public,
+      loaded: publicConfig,
+      warn,
     })
-
-    const publicConfig = fromEnvOr(publicEnv, inYaml('public'))
-    if (publicConfig.raw === undefined) {
-      throw new Error(
-        `Config not found in any source: ${publicEnv.describe()}, ${publicConfig.origin}`,
-      )
-    }
-    parse('public', schemas.public, publicConfig)
-
-    const privateConfig = fromEnvOr(privateEnv, inYaml('private'))
-    const server: LoadedConfig =
-      privateConfig.raw === undefined
-        ? publicConfig
-        : {
-            raw: deepMerge(publicConfig.raw, privateConfig.raw),
-            origin: `${publicConfig.origin} + ${privateConfig.origin}`,
-          }
-
-    const build = fromEnvOr(buildEnv, inYaml('build'))
-
     return {
       public: publicConfig,
       server,
-      serverConfig: parse('server', schemas.server ?? schemas.public, server),
+      serverConfig: parseSection({
+        settings,
+        section: Section.Server,
+        loaded: server,
+        warn,
+      }),
       build,
-      buildConfig: parseBuildConfig(settings, build, parse),
+      buildConfig: parseBuild({ settings, loaded: build, warn }),
     }
   }
 
   return { load, watchedFiles }
+}
+
+export function loadBuildConfig(
+  settings: ConfigKitSettings,
+  warn: Warn = console.warn,
+): unknown {
+  const loaded = createProcessEnvSource({
+    envVar: settings.envVars.build,
+  }).loadSync()
+  const buildConfig = parseBuild({ settings, loaded, warn })
+  const leaked = settings.sensitive
+    .filter((entry) => entry.startsWith(BUILD_PREFIX))
+    .filter(
+      (entry) =>
+        get(buildConfig, entry.slice(BUILD_PREFIX.length)) !== undefined,
+    )
+  if (leaked.length > 0) {
+    throw new Error(
+      `Sensitive build config is set in env ${settings.envVars.build}: ${leaked.join(', ')}. Sensitive values are allowed only in vite serve, a build would inline them into the bundle`,
+    )
+  }
+  return buildConfig
 }
 
 export function yamlSource(
@@ -113,7 +128,7 @@ export function yamlSource(
     localYamlFile === false ? undefined : localYamlFile,
     process.env[overlayEnvVar],
   ]
-    .filter((file) => !isNil(file))
+    .filter(isNotNil)
     .map((file) => path.resolve(path.dirname(configPath), file))
   const watchedFiles = [configPath, ...overlays]
   const yaml = mergeAll(
@@ -124,78 +139,75 @@ export function yamlSource(
   return { yaml, watchedFiles }
 }
 
-export function yamlSections(yaml: SyncConfigSource): Record<string, unknown> {
-  const document = yaml.loadSync()
-  const sections = isPlainObject(document) ? document : {}
-  const unknown = Object.keys(sections).filter((key) => !SECTIONS.includes(key))
+export interface YamlDocument {
+  sections: Record<string, unknown>
+  source: string
+}
+
+export function yamlDocument(yaml: SyncConfigSource): YamlDocument {
+  const loaded = yaml.loadSync()
+  const sections = isPlainObject(loaded?.raw) ? loaded.raw : {}
+  const source = loaded?.source ?? yaml.describe()
+  const known: string[] = Object.values(YamlSection)
+  const unknown = Object.keys(sections).filter((key) => !known.includes(key))
   if (unknown.length > 0) {
     throw new Error(
-      `Unknown sections in ${yaml.describe()}: ${unknown.join(', ')} (expected ${SECTIONS.join(', ')})`,
+      `Unknown sections in ${source}: ${unknown.join(', ')} (expected ${known.join(', ')})`,
     )
   }
-  return sections
+  return { sections, source }
 }
 
-type SectionParser = (
-  section: Section,
-  schema: StandardSchemaV1,
-  loaded: LoadedConfig,
-) => unknown
+export function yamlSectionSource(
+  { sections, source }: YamlDocument,
+  section: YamlSection,
+): SyncConfigSource {
+  return createInMemorySource(sections[section], `${source} (${section})`)
+}
 
-function sectionParser(
-  settings: ConfigKitSettings,
-  warn: (message: string) => void,
-): SectionParser {
-  return (section, schema, { raw, origin }) =>
-    parseOrThrow(schema, raw, origin, {
-      name: section,
-      knownKeys: settings.knownKeys[section],
-      unknownKeys: settings.unknownKeys,
-      warn,
+const BUILD_PREFIX = 'build.'
+
+function parseSection({
+  settings: { definition, knownKeysBySection, unknownKeys },
+  section,
+  loaded,
+  warn,
+}: {
+  settings: ConfigKitSettings
+  section: Section
+  loaded: RawConfig
+  warn: Warn
+}): unknown {
+  return parseOrThrow(schemaFor(definition.schemas, section), loaded, {
+    name: section,
+    knownKeys: knownKeysBySection[section],
+    unknownKeys,
+    warn,
+  })
+}
+
+function parseBuild({
+  settings,
+  loaded,
+  warn,
+}: {
+  settings: ConfigKitSettings
+  loaded: RawConfig | undefined
+  warn: Warn
+}): unknown {
+  return match({ schema: settings.definition.schemas.build, loaded })
+    .with({ schema: P.nullish, loaded: P.nullish }, () => undefined)
+    .with({ schema: P.nullish, loaded: P.nonNullable }, ({ loaded }) => {
+      throw new Error(
+        `Build config found in ${loaded.source}, but the config file defines no schemas.build`,
+      )
     })
-}
-
-export function loadBuildConfig(
-  settings: ConfigKitSettings,
-  warn: (message: string) => void = console.warn,
-): unknown {
-  const env = createProcessEnvSource({ envVar: settings.envVars.build })
-  const loaded = { raw: env.loadSync(), origin: env.describe() }
-  const buildConfig = parseBuildConfig(
-    settings,
-    loaded,
-    sectionParser(settings, warn),
-  )
-  const leaked = settings.sensitive.filter(
-    (entry) => get(buildConfig, entry.slice('build.'.length)) !== undefined,
-  )
-  if (leaked.length > 0) {
-    throw new Error(
-      `Sensitive build config is set in ${loaded.origin}: ${leaked.join(', ')}. Sensitive values are allowed only in vite serve, a build would inline them into the bundle`,
+    .otherwise(() =>
+      parseSection({
+        settings,
+        section: Section.Build,
+        loaded: loaded ?? { raw: {}, source: 'schemas.build defaults' },
+        warn,
+      }),
     )
-  }
-  return buildConfig
-}
-
-function parseBuildConfig(
-  { definition: { schemas } }: ConfigKitSettings,
-  loaded: LoadedConfig,
-  parse: SectionParser,
-): unknown {
-  if (schemas.build)
-    return parse('build', schemas.build, { ...loaded, raw: loaded.raw ?? {} })
-  if (loaded.raw !== undefined) {
-    throw new Error(
-      `Build config found in ${loaded.origin}, but the config file defines no schemas.build`,
-    )
-  }
-  return undefined
-}
-
-function fromEnvOr(
-  env: SyncConfigSource,
-  fallback: LoadedConfig,
-): LoadedConfig {
-  const raw = env.loadSync()
-  return raw === undefined ? fallback : { raw, origin: env.describe() }
 }
