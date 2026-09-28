@@ -1,3 +1,10 @@
+# [0.2.0](https://github.com/yoshintame/config-kit/compare/v0.1.0...v0.2.0) (2026-09-28)
+
+
+### Features
+
+* **vite:** own the SPA path from yaml to container ([43305b9](https://github.com/yoshintame/config-kit/commit/43305b9db7925184c082914df35797010f378d04))
+
 # [0.1.0](https://github.com/yoshintame/config-kit/compare/v0.0.0...v0.1.0) (2026-09-26)
 
 
