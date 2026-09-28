@@ -1,5 +1,3 @@
-import { match } from 'ts-pattern'
-
 import { type ConfigKitSchemas, Section } from './define-config-kit'
 import { toEnum } from './guards'
 import type { ObjectSchema } from './loader'
@@ -38,12 +36,12 @@ export function schemaFor(
   schemas: ConfigKitSchemas,
   section: `${Section}`,
 ): ObjectSchema {
-  return match(toEnum(Section, section))
-    .with(Section.Public, () => schemas.public)
-    .with(Section.Server, () => schemas.server ?? schemas.public)
-    .with(Section.Build, () => {
-      if (!schemas.build) throw new Error('The config defines no schemas.build')
-      return schemas.build
-    })
-    .exhaustive()
+  const schemasBySection = {
+    [Section.Public]: schemas.public,
+    [Section.Server]: schemas.server ?? schemas.public,
+    [Section.Build]: schemas.build,
+  } satisfies Record<Section, ObjectSchema | undefined>
+  const schema = schemasBySection[toEnum(Section, section)]
+  if (!schema) throw new Error(`The config defines no schemas.${section}`)
+  return schema
 }

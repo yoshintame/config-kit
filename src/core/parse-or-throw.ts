@@ -1,5 +1,4 @@
 import { isPlainObject, once } from 'es-toolkit'
-import { match } from 'ts-pattern'
 
 import { ConfigErrorKind, ConfigKitError } from './errors'
 import { toEnum } from './guards'
@@ -54,11 +53,12 @@ export function parseOrThrow<S extends StandardSchemaV1>(
   const unknown = knownKeys ? unknownTopKeys(raw, knownKeys) : []
   if (unknown.length > 0) {
     const message = `Unknown top-level config keys${target()} (loaded from ${source}): ${unknown.join(', ')}`
-    match(toEnum(UnknownKeys, unknownKeys))
-      .with(UnknownKeys.Strict, () => fail(message))
-      .with(UnknownKeys.Warn, () => warn(message))
-      .with(UnknownKeys.Ignore, () => undefined)
-      .exhaustive()
+    const reactionsByMode = {
+      [UnknownKeys.Strict]: fail,
+      [UnknownKeys.Warn]: warn,
+      [UnknownKeys.Ignore]: () => undefined,
+    } satisfies Record<UnknownKeys, (message: string) => void>
+    reactionsByMode[toEnum(UnknownKeys, unknownKeys)](message)
   }
   return result.value
 }

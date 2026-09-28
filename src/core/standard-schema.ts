@@ -3,7 +3,6 @@ import type {
   StandardSchemaV1,
 } from '@standard-schema/spec'
 import { isPlainObject } from 'es-toolkit'
-import { match, P } from 'ts-pattern'
 
 export type { StandardSchemaV1 }
 
@@ -71,13 +70,9 @@ export function topLevelKeys(
       `'${name}': checking unknown keys needs a schema with ~standard.jsonSchema (Zod >= 4.2, ArkType, Valibot through toStandardJsonSchema)`,
     )
   }
-  const properties = objectProperties(jsonSchema)
-  return match({ extra: allowsExtraKeys(jsonSchema), properties })
-    .with({ extra: true }, () => undefined)
-    .with({ properties: undefined }, () => {
-      throw new Error(`'${name}': checking unknown keys needs an object schema`)
-    })
-    .otherwise(({ properties }) => Object.keys(properties ?? {}))
+  return allowsExtraKeys(jsonSchema)
+    ? undefined
+    : Object.keys(requireProperties(jsonSchema, name))
 }
 
 export function objectProperties(
@@ -131,21 +126,33 @@ function dotPath(
   return path
     .map((segment) => (typeof segment === 'object' ? segment.key : segment))
     .map((key, index) =>
-      match(key)
-        .with(P.number, (position) => `[${position}]`)
-        .when(
-          (name) => !IDENTIFIER.test(String(name)),
-          (name) => `[${JSON.stringify(String(name))}]`,
-        )
-        .otherwise((name) => (index === 0 ? String(name) : `.${String(name)}`)),
+      typeof key === 'number' ? `[${key}]` : nameSegment(String(key), index),
     )
     .join('')
 }
 
+function nameSegment(name: string, index: number): string {
+  if (!IDENTIFIER.test(name)) return `[${JSON.stringify(name)}]`
+  return index === 0 ? name : `.${name}`
+}
+
 function refPath(ref: unknown, prefix: string): string | undefined {
-  return match(ref)
-    .with(P.string.startsWith(prefix), (value) => value.slice(prefix.length))
-    .otherwise(() => undefined)
+  return typeof ref === 'string' ? stripPrefix(ref, prefix) : undefined
+}
+
+function stripPrefix(value: string, prefix: string): string | undefined {
+  return value.startsWith(prefix) ? value.slice(prefix.length) : undefined
+}
+
+function requireProperties(
+  jsonSchema: JsonSchema,
+  name: string,
+): Record<string, JsonSchema> {
+  const properties = objectProperties(jsonSchema)
+  if (!properties) {
+    throw new Error(`'${name}': checking unknown keys needs an object schema`)
+  }
+  return properties
 }
 
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/

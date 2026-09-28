@@ -7,5 +7,24 @@
         "noNonNullAssertion": "off"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/core/**", "src/browser/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "ts-pattern": "core and browser ship to the client bundle: ts-pattern more than doubles their size"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

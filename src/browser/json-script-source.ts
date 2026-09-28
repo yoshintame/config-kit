@@ -1,5 +1,3 @@
-import { match, P } from 'ts-pattern'
-
 import {
   ConfigErrorKind,
   ConfigKitError,
@@ -21,22 +19,22 @@ export function createJsonScriptSource({
 }: JsonScriptSourceOptions = {}): SyncConfigSource {
   const source = `script#${elementId}`
 
+  function parseInput(input: string) {
+    if (input === placeholder) {
+      throw new ConfigKitError(
+        `${source} still holds the ${placeholder} placeholder: the container did not substitute it into index.html`,
+        { kind: ConfigErrorKind.Placeholder, section: undefined, source },
+      )
+    }
+    return parseWith({ parser: jsonParser, input, source })
+  }
+
   return {
     loadSync() {
-      return match(
-        globalThis.document?.getElementById(elementId)?.textContent?.trim(),
-      )
-        .with(P.union(P.nullish, ''), () => undefined)
-        .when(
-          (input) => input === placeholder,
-          () => {
-            throw new ConfigKitError(
-              `${source} still holds the ${placeholder} placeholder: the container did not substitute it into index.html`,
-              { kind: ConfigErrorKind.Placeholder, section: undefined, source },
-            )
-          },
-        )
-        .otherwise((input) => parseWith({ parser: jsonParser, input, source }))
+      const input = globalThis.document
+        ?.getElementById(elementId)
+        ?.textContent?.trim()
+      return input ? parseInput(input) : undefined
     },
     describe: () => source,
   }

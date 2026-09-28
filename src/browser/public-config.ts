@@ -1,5 +1,4 @@
 import { isPromise } from 'es-toolkit'
-import { match } from 'ts-pattern'
 
 import {
   type ConfigKitDefinition,
@@ -59,8 +58,5 @@ function resolveFallback(
 }
 
 function isUsableFallback(fallback: unknown): boolean {
-  return match(fallback)
-    .with(undefined, () => false)
-    .when(isPromise, () => false)
-    .otherwise(() => true)
+  return fallback === undefined ? false : !isPromise(fallback)
 }
