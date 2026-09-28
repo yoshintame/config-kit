@@ -1,3 +1,16 @@
+# [0.3.0](https://github.com/yoshintame/config-kit/compare/v0.2.0...v0.3.0) (2026-09-28)
+
+
+### Features
+
+* root config file, in-module validation and Standard Schema ([5952078](https://github.com/yoshintame/config-kit/commit/59520785a7c51304b073a62f6e93a88db1f9e4bf))
+* source-based core and fixes from the code review ([7f3c1c9](https://github.com/yoshintame/config-kit/commit/7f3c1c94222ff21a261295da5bd3bb346d9a106e))
+
+
+### Performance Improvements
+
+* keep ts-pattern out of the client runtime ([7455b2b](https://github.com/yoshintame/config-kit/commit/7455b2bf243c74a0e097bee3212f3c0493b4319e))
+
 # [0.2.0](https://github.com/yoshintame/config-kit/compare/v0.1.0...v0.2.0) (2026-09-28)
 
 
