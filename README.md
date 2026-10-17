@@ -316,6 +316,10 @@ COPY --from=build /app/dist-config/docker-entrypoint.d/ /docker-entrypoint.d/
 
 Run the validator as an init container before nginx. Keep `index.html` out of service-worker precache, or a cached page keeps serving the old config.
 
+## Development
+
+`mise install`, `bun install`, then `hk install --mise` once per clone for the git hooks. `hk check --all --slow` runs every check CI runs.
+
 ## License
 
 MIT
