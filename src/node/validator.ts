@@ -1,14 +1,16 @@
 import {
   type ConfigKitSchemas,
   errorMessage,
-  type ResolveSectionOptions,
   resolveSection,
+  type ResolveSectionOptions,
   Section,
 } from '../core'
 import { createProcessEnvSource } from './process-env-source'
 
-export interface ValidatorOptions
-  extends Omit<ResolveSectionOptions, 'source'> {
+export interface ValidatorOptions extends Omit<
+  ResolveSectionOptions,
+  'source'
+> {
   envVar: string
 }
 

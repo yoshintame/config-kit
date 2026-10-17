@@ -28,11 +28,7 @@ export {
   type SyncConfigLoader,
 } from './loader'
 export { deepMerge, mergeAll } from './merge-all'
-export {
-  type ParseOptions,
-  parseOrThrow,
-  UnknownKeys,
-} from './parse-or-throw'
+export { type ParseOptions, parseOrThrow, UnknownKeys } from './parse-or-throw'
 export { requireConfig, requiredSource } from './require-config'
 export {
   type ResolveSectionOptions,

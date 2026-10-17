@@ -15,13 +15,13 @@ bun add @yoshintame/config-kit zod
 
 Bring any Standard Schema library; the examples use Zod 4. The Vite plugin also needs `vite@^6.1 || ^7`.
 
-| Entry point | Contents | Runtime |
-| --- | --- | --- |
-| `@yoshintame/config-kit` | Loader, source contract, composition, in-memory source | Any |
-| `@yoshintame/config-kit/node` | Env var, file and YAML sources | Node, Bun |
-| `@yoshintame/config-kit/browser` | JSON `<script>` element source, default error screen | Browser |
-| `@yoshintame/config-kit/vite` | Vite plugin, `loadDevConfig` | Node, Bun |
-| `@yoshintame/config-kit/client` | Typings for the virtual modules | Types only |
+| Entry point                      | Contents                                               | Runtime    |
+| -------------------------------- | ------------------------------------------------------ | ---------- |
+| `@yoshintame/config-kit`         | Loader, source contract, composition, in-memory source | Any        |
+| `@yoshintame/config-kit/node`    | Env var, file and YAML sources                         | Node, Bun  |
+| `@yoshintame/config-kit/browser` | JSON `<script>` element source, default error screen   | Browser    |
+| `@yoshintame/config-kit/vite`    | Vite plugin, `loadDevConfig`                           | Node, Bun  |
+| `@yoshintame/config-kit/client`  | Typings for the virtual modules                        | Types only |
 
 The core entry imports nothing from `node:*`. Under the `browser` condition, `/node` resolves to a stub whose functions throw.
 
@@ -193,18 +193,18 @@ export default defineConfig(({ command }) => {
 
 The plugin finds `config-kit.config.ts` in the Vite root; `configKit({ configFile })` points it elsewhere. `loadDevConfig(config, { root? })` reads the same files as the dev server and returns the validated server config, typed from the schemas. It searches from `process.cwd()`; pass `root` when `vite.config` sets a different Vite root.
 
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `schemas.public` | required | The runtime config the browser sees |
-| `schemas.server` | `schemas.public` | `public` plus `private`, for dev-server settings and SSR |
-| `schemas.build` | none | Build-time values inlined into the bundle |
-| `onInvalid` | default screen | Reaction to invalid config in the browser, see below |
-| `unknownKeys` | `'strict'` | Top-level keys no schema declares: `'strict'` fails, `'warn'` logs, `'ignore'` skips the check. Applies to every section |
-| `sensitive` | `[]` | Paths under `build.` or `private.` that hold secrets, see below |
-| `dev` | | `yamlFile`, `yamlPath`, `localYamlFile`, `overlayEnvVar`, `watch`, `hmr`, `serverRestart`, `fullReload` |
-| `docker` | `false` | Emit the container validator and nginx hook |
-| `envVars` | `APP_PUBLIC_CONFIG`, `APP_PRIVATE_CONFIG`, `APP_BUILD_CONFIG` | Names of the three env vars |
-| `elementId` | `__CONFIG__` | Id of the JSON `<script>` element |
+| Option           | Default                                                       | Meaning                                                                                                                  |
+| ---------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `schemas.public` | required                                                      | The runtime config the browser sees                                                                                      |
+| `schemas.server` | `schemas.public`                                              | `public` plus `private`, for dev-server settings and SSR                                                                 |
+| `schemas.build`  | none                                                          | Build-time values inlined into the bundle                                                                                |
+| `onInvalid`      | default screen                                                | Reaction to invalid config in the browser, see below                                                                     |
+| `unknownKeys`    | `'strict'`                                                    | Top-level keys no schema declares: `'strict'` fails, `'warn'` logs, `'ignore'` skips the check. Applies to every section |
+| `sensitive`      | `[]`                                                          | Paths under `build.` or `private.` that hold secrets, see below                                                          |
+| `dev`            |                                                               | `yamlFile`, `yamlPath`, `localYamlFile`, `overlayEnvVar`, `watch`, `hmr`, `serverRestart`, `fullReload`                  |
+| `docker`         | `false`                                                       | Emit the container validator and nginx hook                                                                              |
+| `envVars`        | `APP_PUBLIC_CONFIG`, `APP_PRIVATE_CONFIG`, `APP_BUILD_CONFIG` | Names of the three env vars                                                                                              |
+| `elementId`      | `__CONFIG__`                                                  | Id of the JSON `<script>` element                                                                                        |
 
 Editing the config file or anything it imports restarts the dev server. The client bundle gets only `schemas.public` and `onInvalid` from it: the plugin drops the other sections and options and marks top-level declarations as side-effect free, so the server schema and its field names stay out. This needs `defineConfigKit({ schemas: { public, ... } })` written with object literals, without spreads; otherwise the plugin warns and ships the whole definition.
 
@@ -244,11 +244,11 @@ if (buildConfig.msw) await import('./mocks')
 fetch(`${publicConfig.backend.apiUrl}/users`)
 ```
 
-| Module | Export | Dev | Build |
-| --- | --- | --- | --- |
-| `virtual:config-kit` | `publicConfig` | `public` section | Client: the JSON `<script>`. SSR: `APP_PUBLIC_CONFIG` |
-| `virtual:config-kit/private` | `serverConfig` | `private` merged over `public` | `APP_PUBLIC_CONFIG` merged with `APP_PRIVATE_CONFIG` |
-| `virtual:config-kit/build` | `buildConfig` | `build` section | `APP_BUILD_CONFIG` over schema defaults |
+| Module                       | Export         | Dev                            | Build                                                 |
+| ---------------------------- | -------------- | ------------------------------ | ----------------------------------------------------- |
+| `virtual:config-kit`         | `publicConfig` | `public` section               | Client: the JSON `<script>`. SSR: `APP_PUBLIC_CONFIG` |
+| `virtual:config-kit/private` | `serverConfig` | `private` merged over `public` | `APP_PUBLIC_CONFIG` merged with `APP_PRIVATE_CONFIG`  |
+| `virtual:config-kit/build`   | `buildConfig`  | `build` section                | `APP_BUILD_CONFIG` over schema defaults               |
 
 The config modules validate when they run. ES modules run their dependencies first, so the first module that reads config triggers the check before its own code, and a failure stops the whole module graph: modules that read config at import time never see invalid values, and `index.html` points straight at the app entry. On the server, SSR and the private module throw instead.
 
@@ -258,11 +258,11 @@ The config modules validate when they run. ES modules run their dependencies fir
 
 Without `onInvalid` the plugin shows the error text in `#root` (or `<body>`) and stops the app; the console shows the uncaught `ConfigKitError`. With it, the handler decides:
 
-| Handler | Result |
-| --- | --- |
-| Returns nothing | The app stops; the screen is up to the handler |
-| Returns a config | It is validated and the app runs with it; if it is invalid too, the default screen shows both errors |
-| Calls `renderDefault()` | The default screen |
+| Handler                 | Result                                                                                               |
+| ----------------------- | ---------------------------------------------------------------------------------------------------- |
+| Returns nothing         | The app stops; the screen is up to the handler                                                       |
+| Returns a config        | It is validated and the app runs with it; if it is invalid too, the default screen shows both errors |
+| Calls `renderDefault()` | The default screen                                                                                   |
 
 ```ts
 onInvalid(error, { kind, section, source, renderDefault }) {
@@ -283,17 +283,18 @@ The build also fails when `index.html` lost the `${APP_PUBLIC_CONFIG}` placehold
 
 ### Dev reactions
 
-| Change | Reaction |
-| --- | --- |
-| Config file, its imports, `build` section, or a path in `dev.serverRestart` | Dev server restart |
-| `public` or `private` | Full page reload |
-| Same, with `dev.hmr: true` | Config modules update in place; reads through `publicConfig` see new values, destructured values keep the old ones. Paths in `dev.fullReload` still reload the page |
-| Invalid config | Error overlay; the last valid config stays active |
+| Change                                                                      | Reaction                                                                                                                                                            |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Config file, its imports, `build` section, or a path in `dev.serverRestart` | Dev server restart                                                                                                                                                  |
+| `public` or `private`                                                       | Full page reload                                                                                                                                                    |
+| Same, with `dev.hmr: true`                                                  | Config modules update in place; reads through `publicConfig` see new values, destructured values keep the old ones. Paths in `dev.fullReload` still reload the page |
+| Invalid config                                                              | Error overlay; the last valid config stays active                                                                                                                   |
 
 ### Docker
 
 A production build leaves this in `index.html`:
 
+<!-- prettier-ignore -->
 ```html
 <script type="application/json" id="__CONFIG__">${APP_PUBLIC_CONFIG}</script>
 ```

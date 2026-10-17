@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest'
-import z from 'zod'
+import { z } from 'zod'
 
 import { createInMemorySource } from './in-memory-source'
 import { createSyncConfigLoader } from './loader'

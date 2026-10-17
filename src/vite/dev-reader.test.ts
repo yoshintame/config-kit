@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import * as v from 'valibot'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import z from 'zod'
+import { z } from 'zod'
 
 import type { ConfigKitDefinition, ConfigKitSchemas } from '../core'
 import { resolveSettings } from './config-file'

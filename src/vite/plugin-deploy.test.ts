@@ -27,19 +27,19 @@ import {
 
 useFixture()
 
-describe('docker', () => {
-  function validate(env: Record<string, string | undefined>) {
-    return spawnSync(
-      process.execPath,
-      [join(root, 'dist-config', VALIDATOR_FILE)],
-      {
-        encoding: 'utf-8',
-        cwd: tmpdir(),
-        env: { PATH: process.env.PATH, ...env },
-      },
-    )
-  }
+function validate(env: Record<string, string | undefined>) {
+  return spawnSync(
+    process.execPath,
+    [join(root, 'dist-config', VALIDATOR_FILE)],
+    {
+      encoding: 'utf-8',
+      cwd: tmpdir(),
+      env: { PATH: process.env.PATH, ...env },
+    },
+  )
+}
 
+describe('docker', () => {
   test('builds a self-contained validator without onInvalid', async () => {
     writeConfig({
       options: ['docker: true', "onInvalid() { console.log('ON_INVALID') }"],

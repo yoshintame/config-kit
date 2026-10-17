@@ -5,8 +5,8 @@ import { toEnum } from './guards'
 import type { RawConfig } from './source'
 import {
   formatIssues,
-  type StandardSchemaV1,
   schemaTitle,
+  type StandardSchemaV1,
   validateSync,
 } from './standard-schema'
 

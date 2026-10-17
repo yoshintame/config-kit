@@ -3,9 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import z from 'zod'
+import { z } from 'zod'
 
-import { jsonParser } from '../core'
 import {
   createFileSource,
   createProcessEnvSource,
@@ -13,6 +12,7 @@ import {
   createYamlEnvSource,
   yamlParser,
 } from '.'
+import { jsonParser } from '../core'
 
 const ENV_VAR = 'TEST_CONFIG_LOADER_VAR'
 const YAML_FILE = 'test-loader.config.yaml'

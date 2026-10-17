@@ -5,8 +5,8 @@ import {
   ConfigKitError,
   createInMemorySource,
   errorMessage,
-  type ResolveSectionOptions,
   resolveSection,
+  type ResolveSectionOptions,
   Section,
 } from '../core'
 import { renderConfigError } from './render-config-error'

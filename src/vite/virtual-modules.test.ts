@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import z from 'zod'
+import { z } from 'zod'
 
 import { Section } from '../core'
 import { JsonSchemaIo, jsonSchemaOf } from '../core/standard-schema'
