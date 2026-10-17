@@ -2,70 +2,27 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
-    env:
-      HUSKY: 0
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Biome
-        run: bunx biome ci .
-
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Test
-        run: bun run test
-
-      - name: Build
-        run: bun run build
-
-      - name: Lint package
-        run: bun run lint:package
+    uses: yoshintame/workflows/.github/workflows/ci.yml@fc18ec71da63534238805989c57806ce35e879be # v1.1.2
+    permissions:
+      contents: read
 
   release:
     needs: verify
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    env:
-      HUSKY: 0
+    if: github.event_name == 'push'
+    uses: yoshintame/workflows/.github/workflows/release-semantic.yml@fc18ec71da63534238805989c57806ce35e879be # v1.1.2
     permissions:
       contents: write
       issues: write
       pull-requests: write
       id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Semantic Release
-        run: bunx semantic-release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
