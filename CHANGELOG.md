@@ -1,3 +1,11 @@
+## [0.3.3](https://github.com/yoshintame/config-kit/compare/v0.3.2...v0.3.3) (2026-10-18)
+
+
+### Bug Fixes
+
+* require Node.js 20 like the type-fest dependency ([766a5cd](https://github.com/yoshintame/config-kit/commit/766a5cd1effdd7824d33b4e34c3dfe3ba3febd4e))
+* **types:** take ReadonlyDeep from type-fest ([6870e3f](https://github.com/yoshintame/config-kit/commit/6870e3fddb2945b247b3efa1c31e8168ea3786ff))
+
 ## [0.3.2](https://github.com/yoshintame/config-kit/compare/v0.3.1...v0.3.2) (2026-10-18)
 
 
