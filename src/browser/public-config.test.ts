@@ -94,7 +94,7 @@ describe('resolvePublicConfig', () => {
 
   test('shows both errors when the returned config is invalid too', () => {
     const root = stubDocument('{"apiUrl":1}')
-    expect(() => resolve(() => ({ apiUrl: 2 }) as never)).toThrow(
+    expect(() => resolve(() => ({ apiUrl: 2 }))).toThrow(
       /loaded from script#__CONFIG__[\s\S]*invalid too[\s\S]*loaded from onInvalid/,
     )
     expect(root.replaceChildren).toHaveBeenCalledOnce()
@@ -107,7 +107,9 @@ describe('resolvePublicConfig', () => {
 
   test('halts when onInvalid returns a promise', () => {
     stubDocument('{')
-    expect(() => resolve(async () => undefined)).toThrow(ConfigKitError)
+    expect(() => resolve(() => Promise.resolve(undefined))).toThrow(
+      ConfigKitError,
+    )
   })
 
   test('rethrows errors that are not config errors', () => {

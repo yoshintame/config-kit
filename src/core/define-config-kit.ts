@@ -48,7 +48,7 @@ export interface ConfigKitDefinition<
   onInvalid?: (
     error: ConfigKitError,
     context: InvalidConfigContext,
-    // biome-ignore lint/suspicious/noConfusingVoidType: a handler without a return statement returns void
+    // oxlint-disable-next-line typescript/no-invalid-void-type -- a handler without a return statement returns void
   ) => StandardSchemaV1.InferInput<S['public']> | void
   unknownKeys?: `${UnknownKeys}`
   sensitive?: SensitivePath[]
@@ -64,7 +64,7 @@ export function defineConfigKit<S extends ConfigKitSchemas>(
   return definition
 }
 
-// biome-ignore lint/suspicious/noEmptyInterface: the app augments it with its config
+// oxlint-disable-next-line typescript/no-empty-object-type -- the app augments it with its config
 export interface Register {}
 
 export type PublicConfig = StandardSchemaV1.InferOutput<
@@ -73,8 +73,10 @@ export type PublicConfig = StandardSchemaV1.InferOutput<
 
 export type ServerConfig = ServerConfigOf<RegisteredSchemas>
 
+// oxlint-disable-next-line typescript/no-generated-empty-object-type -- without a build schema the build config has no keys
 export type BuildConfig = OutputOr<
   SchemaAt<RegisteredSchemas, Section.Build>,
+  // oxlint-disable-next-line typescript/no-generated-empty-object-type -- see above
   Record<never, never>
 >
 

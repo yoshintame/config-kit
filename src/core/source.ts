@@ -18,7 +18,7 @@ export interface Parser<T = unknown> {
 }
 
 export const jsonParser: Parser = {
-  parse: (input) => JSON.parse(input),
+  parse: (input): unknown => JSON.parse(input),
 }
 
 export function parseWith({

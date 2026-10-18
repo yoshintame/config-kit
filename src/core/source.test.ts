@@ -23,6 +23,7 @@ describe('parseWith', () => {
   test('stringifies non-error throws', () => {
     const parser = {
       parse: () => {
+        // oxlint-disable-next-line typescript/only-throw-error -- parseWith must report a thrown string
         throw 'nope'
       },
     }

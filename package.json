@@ -59,7 +59,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsup && node scripts/add-client-types.mjs",
+    "build": "tsup && node scripts/add-client-types.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p test/types && tsc -p test/types/public-only",
     "lint:package": "bun run build && publint --strict && attw --pack . --profile esm-only && tsc -p test/types/tsconfig.dist.json",
@@ -92,10 +92,11 @@
     "@types/estree": "^1.0.9",
     "@types/node": "^22.15.32",
     "@valibot/to-json-schema": "^1.8.0",
-    "@yoshintame/ox-config": "^0.1.1",
+    "@yoshintame/ox-config": "^0.2.0",
     "arktype": "^2.2.5",
     "oxfmt": "^0.72.0",
     "oxlint": "^1.87.0",
+    "oxlint-tsgolint": "^7.0.2004",
     "publint": "^0.3.12",
     "semantic-release": "^25.0.9",
     "tsup": "^8.5.1",

@@ -120,7 +120,7 @@ describe('createSyncConfigLoader', () => {
     const loader = createSyncConfigLoader(createInMemorySource({ a: 1 }))
     const config = loader.defineConfig(z.object({ a: z.number() }))
     expect(() => {
-      ;(config as { a: number }).a = 2
+      config.a = 2
     }).toThrow(TypeError)
     expect(() => delete (config as { a?: number }).a).toThrow(TypeError)
     expect(() => Object.defineProperty(config, 'b', { value: 1 })).toThrow(

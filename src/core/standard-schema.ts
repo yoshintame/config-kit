@@ -89,7 +89,11 @@ export function objectProperties(
     .filter(isPlainObject)
     .map((variant) => objectProperties(variant, root))
     .filter((properties) => properties !== undefined)
-  return variants.length === 0 ? undefined : Object.assign({}, ...variants)
+  return variants.length === 0
+    ? undefined
+    : Object.fromEntries(
+        variants.flatMap((properties) => Object.entries(properties)),
+      )
 }
 
 const DEFS = '#/$defs/'

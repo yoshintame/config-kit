@@ -1,4 +1,4 @@
-import { isPromise } from 'es-toolkit'
+import { isNil, isPromise } from 'es-toolkit'
 
 import {
   type ConfigKitDefinition,
@@ -31,14 +31,16 @@ function resolveFallback(
   error: ConfigKitError,
 ): unknown {
   const renderDefault = () => renderConfigError(error)
-  const fallback = config.onInvalid
-    ? config.onInvalid(error, {
-        kind: error.kind,
-        section: Section.Public,
-        source: error.source,
-        renderDefault,
-      })
-    : renderDefault()
+  if (isNil(config.onInvalid)) {
+    renderDefault()
+    throw error
+  }
+  const fallback = config.onInvalid(error, {
+    kind: error.kind,
+    section: Section.Public,
+    source: error.source,
+    renderDefault,
+  })
   if (!isUsableFallback(fallback)) throw error
 
   try {

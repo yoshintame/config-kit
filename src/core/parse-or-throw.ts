@@ -34,7 +34,10 @@ export function parseOrThrow<S extends StandardSchemaV1>(
   }: ParseOptions = {},
 ): StandardSchemaV1.InferOutput<S> {
   const section = once(() => name ?? schemaTitle(schema))
-  const target = () => (section() ? ` for '${section()}'` : '')
+  const target = () => {
+    const sectionName = section()
+    return sectionName ? ` for '${sectionName}'` : ''
+  }
   const fail = (message: string): never => {
     throw new ConfigKitError(message, {
       kind: ConfigErrorKind.Schema,

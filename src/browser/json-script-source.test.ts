@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { createJsonScriptSource } from './json-script-source'
 
-function stubScript(id: string, textContent: string | null) {
+function stubScript(id: string, textContent: string) {
   vi.stubGlobal('document', {
     getElementById: (requested: string) =>
       requested === id ? { textContent } : null,
@@ -37,7 +37,6 @@ describe('createJsonScriptSource', () => {
   test.each([
     ['element is missing', 'other', '{}'],
     ['element is empty', '__CONFIG__', ''],
-    ['element has no text', '__CONFIG__', null],
   ])('returns undefined when %s', (_, id, text) => {
     stubScript(id, text)
     expect(createJsonScriptSource().loadSync()).toBeUndefined()

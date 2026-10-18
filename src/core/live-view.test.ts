@@ -19,7 +19,7 @@ describe('liveConfig', () => {
   test('rejects writes', () => {
     const view = liveConfig({ data: {} }, { a: 1 })
     expect(() => {
-      ;(view as { a: number }).a = 2
+      view.a = 2
     }).toThrow(TypeError)
   })
 })

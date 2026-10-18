@@ -52,10 +52,10 @@ export function collectSecrets(
     [YamlSection.Private]: settings.envVars.private,
   }
   return settings.sensitive.flatMap((entry) => {
-    const [prefix, ...rest] = entry.split('.')
-    const section =
-      prefix === YamlSection.Build ? YamlSection.Build : YamlSection.Private
-    const relative = rest.join('.')
+    const section = entry.startsWith(`${YamlSection.Build}.`)
+      ? YamlSection.Build
+      : YamlSection.Private
+    const relative = entry.slice(section.length + 1)
     return [sections[section], envValue(envVarsBySection[section])].flatMap(
       (value) => stringLeaves(get(value, relative), entry),
     )

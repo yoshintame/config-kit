@@ -37,6 +37,7 @@ export async function writeDockerArtifacts({
     root,
     mode,
     configFile: false,
+    // oxlint-disable-next-line typescript/no-deprecated -- its replacement envDir: false needs Vite 6.3
     envFile: false,
     logLevel: 'warn',
     resolve: { alias },

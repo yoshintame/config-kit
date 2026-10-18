@@ -83,7 +83,10 @@ export function configKit({ configFile }: ConfigKitOptions = {}): Plugin {
   function clientBuild(): BuildMode | undefined {
     return match(mode)
       .with({ command: 'build' }, (build) =>
-        resolved.build.ssr ? undefined : build,
+        resolved.build.ssr === true ||
+        (typeof resolved.build.ssr === 'string' && resolved.build.ssr !== '')
+          ? undefined
+          : build,
       )
       .otherwise(() => undefined)
   }
@@ -161,7 +164,7 @@ export function configKit({ configFile }: ConfigKitOptions = {}): Plugin {
       const section = sectionOfId(id)
       return match({ section, fromGenerated: isGeneratedModule(importer) })
         .with({ section: Section.Server }, () =>
-          options?.ssr
+          options.ssr === true
             ? configModulesBySection[Section.Server].resolvedId
             : this.error(
                 `${configModulesBySection[Section.Server].id} is server-only`,

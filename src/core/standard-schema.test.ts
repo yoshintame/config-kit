@@ -108,7 +108,9 @@ describe('parseOrThrow', () => {
   })
 
   test('rejects asynchronous validation', () => {
-    const schema = z.object({ a: z.string().refine(async () => true) })
+    const schema = z.object({
+      a: z.string().refine(() => Promise.resolve(true)),
+    })
     expect(() =>
       parseOrThrow(
         schema,

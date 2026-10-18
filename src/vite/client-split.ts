@@ -163,20 +163,17 @@ function keyOf(property: Property): string | undefined {
 }
 
 function reachableNames(body: TopLevel[], split: Split): Set<string> {
-  const reachable = new Set<string>()
-  const pending = body
-    .filter((node) => isRoot(node))
-    .flatMap((node) => referencedNames(node, split))
-
-  while (pending.length > 0) {
-    const name = pending.pop()!
-    if (reachable.has(name)) continue
-    reachable.add(name)
-    pending.push(
-      ...declarationsOf(body, name).flatMap((node) =>
-        referencedNames(node, split),
-      ),
-    )
+  const reachable = new Set(
+    body
+      .filter((node) => isRoot(node))
+      .flatMap((node) => referencedNames(node, split)),
+  )
+  for (const name of reachable) {
+    for (const node of declarationsOf(body, name)) {
+      for (const referenced of referencedNames(node, split)) {
+        reachable.add(referenced)
+      }
+    }
   }
   return reachable
 }
@@ -204,7 +201,7 @@ function isReachable(node: TopLevel, reachable: Set<string>): boolean {
     )
     .with(
       { type: P.union('FunctionDeclaration', 'ClassDeclaration') },
-      ({ id }) => (id ? reachable.has(id.name) : true),
+      ({ id }) => reachable.has(id.name),
     )
     .with({ type: 'ImportDeclaration' }, ({ specifiers }) =>
       specifiers.length === 0
@@ -223,7 +220,7 @@ function declarationsOf(body: TopLevel[], name: string): Node[] {
       )
       .with(
         { type: P.union('FunctionDeclaration', 'ClassDeclaration') },
-        (declaration) => (declaration.id?.name === name ? [declaration] : []),
+        (declaration) => (declaration.id.name === name ? [declaration] : []),
       )
       .otherwise(() => []),
   )
@@ -264,7 +261,9 @@ function identifierName(node: Node): string[] {
 
 function childNodes(node: Node): Node[] {
   return Object.values(node)
-    .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    .flatMap((value: unknown): unknown[] =>
+      Array.isArray(value) ? value : [value],
+    )
     .filter(isAstNode)
 }
 

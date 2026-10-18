@@ -54,7 +54,7 @@ export function trackServer(dev: ViteDevServer): ViteDevServer {
   return dev
 }
 
-export function writeYaml(apiUrl: unknown, extra = '', tail = '') {
+export function writeYaml(apiUrl: string, extra = '', tail = '') {
   writeFileSync(
     yamlPath,
     `public:\n  backend:\n    apiUrl: ${apiUrl}\n${extra}private:\n  db:\n    url: postgres://local\n${tail}`,

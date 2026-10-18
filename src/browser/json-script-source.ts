@@ -31,9 +31,10 @@ export function createJsonScriptSource({
 
   return {
     loadSync() {
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- the source also runs without a DOM
       const input = globalThis.document
         ?.getElementById(elementId)
-        ?.textContent?.trim()
+        ?.textContent.trim()
       return input ? parseInput(input) : undefined
     },
     describe: () => source,
