@@ -74,7 +74,7 @@ A source returns the raw config together with where it came from (`env APP_CONFI
 
 ### `createSyncConfigLoader(source)`
 
-- **`defineConfig(schema, { name? })`** returns a read-only proxy over the parsed output of an object schema. The first property access loads the source and validates; the result is cached. Writes and deletes throw.
+- **`defineConfig(schema, { name? })`** returns a read-only proxy over the parsed output of an object schema. The first property access loads the source and validates; the result is cached. Writes and deletes throw. The type is read-only at every depth, as are `publicConfig`, `serverConfig` and `buildConfig`; at runtime the proxy rejects writes to top-level keys only.
 - **`onChange(callback)`** subscribes to `source.watch`. On change the loader drops its caches before calling subscribers. Destructured values keep their old value.
 - **`loadRaw()`** returns the cached raw value without validation, `undefined` when the source is empty; **`reset()`** drops every cache.
 

@@ -17,5 +17,7 @@ publicConfig.flag = true
 serverConfig.devServer = { backendUrl: '' }
 // @ts-expect-error
 buildConfig.msw = true
+// @ts-expect-error
+serverConfig.devServer.backendUrl = ''
 
 export { backend, flag, msw, token, url }
