@@ -17,10 +17,10 @@ export enum UnknownKeys {
 }
 
 export interface ParseOptions {
-  name?: string
-  knownKeys?: readonly string[]
-  unknownKeys?: `${UnknownKeys}`
-  warn?: (message: string) => void
+  name?: string | undefined
+  knownKeys?: readonly string[] | undefined
+  unknownKeys?: `${UnknownKeys}` | undefined
+  warn?: ((message: string) => void) | undefined
 }
 
 export function parseOrThrow<S extends StandardSchemaV1>(

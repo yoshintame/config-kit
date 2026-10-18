@@ -9,8 +9,8 @@ import {
 export const DEFAULT_CONFIG_ELEMENT_ID = '__CONFIG__'
 
 export interface JsonScriptSourceOptions {
-  elementId?: string
-  placeholder?: string
+  elementId?: string | undefined
+  placeholder?: string | undefined
 }
 
 export function createJsonScriptSource({

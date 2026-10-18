@@ -40,7 +40,7 @@ type Warn = (message: string) => void
 
 export function loadDevConfig<S extends ConfigKitSchemas>(
   definition: ConfigKitDefinition<S>,
-  { root = process.cwd() }: { root?: string } = {},
+  { root = process.cwd() }: { root?: string | undefined } = {},
 ): ServerConfigOf<S> {
   return createDevReader(resolveSettings(definition), root).load()
     .serverConfig as ServerConfigOf<S>

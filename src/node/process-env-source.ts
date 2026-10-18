@@ -7,7 +7,7 @@ import {
 
 export interface ProcessEnvSourceOptions {
   envVar: string
-  parser?: Parser
+  parser?: Parser | undefined
 }
 
 export function createProcessEnvSource({

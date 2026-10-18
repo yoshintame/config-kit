@@ -26,7 +26,7 @@ import { resolveGeneratedImport } from './generated-imports'
 import { buildConfigModule, buildModule, devModule } from './virtual-modules'
 
 export interface ConfigKitOptions {
-  configFile?: string
+  configFile?: string | undefined
 }
 
 interface ServeMode {

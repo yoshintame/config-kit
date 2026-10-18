@@ -37,7 +37,12 @@ export interface ConfigKitSettings {
   unknownKeys: UnknownKeys
   sensitive: SensitivePath[]
   docker: boolean
-  dev: Required<Omit<DevOptions, 'yamlPath'>> & { yamlPath?: string }
+  dev: {
+    [K in Exclude<keyof DevOptions, 'yamlPath'>]-?: Exclude<
+      DevOptions[K],
+      undefined
+    >
+  } & { yamlPath: string | undefined }
   knownKeysBySection: Partial<Record<Section, string[]>>
   buildShape: JsonSchema | undefined
 }
@@ -54,8 +59,8 @@ export async function importConfigFile({
   alias,
 }: {
   root: string
-  configFile?: string
-  alias?: AliasOptions
+  configFile?: string | undefined
+  alias?: AliasOptions | undefined
 }): Promise<ConfigFile> {
   const configPath = path.resolve(root, configFile)
   if (!existsSync(configPath)) {
@@ -65,7 +70,7 @@ export async function importConfigFile({
   }
   const { module, dependencies } = await runnerImport<{ default?: unknown }>(
     configPath,
-    { root, logLevel: 'silent', resolve: { alias } },
+    { root, logLevel: 'silent', resolve: alias === undefined ? {} : { alias } },
   )
   return {
     configPath,

@@ -8,7 +8,7 @@ import { yamlParser } from './yaml-parser'
 export interface YamlEnvSourceOptions {
   envVar: string
   yamlFile: string
-  yamlPath?: string
+  yamlPath?: string | undefined
 }
 
 export function createYamlEnvSource({

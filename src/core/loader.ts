@@ -7,7 +7,7 @@ import type { StandardSchemaV1 } from './standard-schema'
 export type ObjectSchema = StandardSchemaV1<unknown, Record<string, unknown>>
 
 export interface DefineConfigOptions {
-  name?: string
+  name?: string | undefined
 }
 
 export interface SyncConfigLoader {

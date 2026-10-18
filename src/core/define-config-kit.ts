@@ -11,8 +11,8 @@ export enum Section {
 
 export interface ConfigKitSchemas {
   public: ObjectSchema
-  server?: ObjectSchema
-  build?: ObjectSchema
+  server?: ObjectSchema | undefined
+  build?: ObjectSchema | undefined
 }
 
 export interface InvalidConfigContext {
@@ -23,20 +23,20 @@ export interface InvalidConfigContext {
 }
 
 export interface DevOptions {
-  yamlFile?: string
-  yamlPath?: string
-  localYamlFile?: string | false
-  overlayEnvVar?: string
-  watch?: boolean
-  hmr?: boolean
-  serverRestart?: string[]
-  fullReload?: string[]
+  yamlFile?: string | undefined
+  yamlPath?: string | undefined
+  localYamlFile?: string | false | undefined
+  overlayEnvVar?: string | undefined
+  watch?: boolean | undefined
+  hmr?: boolean | undefined
+  serverRestart?: string[] | undefined
+  fullReload?: string[] | undefined
 }
 
 export interface EnvVarNames {
-  public?: string
-  private?: string
-  build?: string
+  public?: string | undefined
+  private?: string | undefined
+  build?: string | undefined
 }
 
 export type SensitivePath = `build.${string}` | `private.${string}`
@@ -45,17 +45,19 @@ export interface ConfigKitDefinition<
   S extends ConfigKitSchemas = ConfigKitSchemas,
 > {
   schemas: S
-  onInvalid?: (
-    error: ConfigKitError,
-    context: InvalidConfigContext,
-    // oxlint-disable-next-line typescript/no-invalid-void-type -- a handler without a return statement returns void
-  ) => StandardSchemaV1.InferInput<S['public']> | void
-  unknownKeys?: `${UnknownKeys}`
-  sensitive?: SensitivePath[]
-  dev?: DevOptions
-  docker?: boolean
-  envVars?: EnvVarNames
-  elementId?: string
+  onInvalid?:
+    | ((
+        error: ConfigKitError,
+        context: InvalidConfigContext,
+        // oxlint-disable-next-line typescript/no-invalid-void-type -- a handler without a return statement returns void
+      ) => StandardSchemaV1.InferInput<S['public']> | void)
+    | undefined
+  unknownKeys?: `${UnknownKeys}` | undefined
+  sensitive?: SensitivePath[] | undefined
+  dev?: DevOptions | undefined
+  docker?: boolean | undefined
+  envVars?: EnvVarNames | undefined
+  elementId?: string | undefined
 }
 
 export function defineConfigKit<S extends ConfigKitSchemas>(
