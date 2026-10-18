@@ -11,6 +11,9 @@ const config = defineConfigKit({
     public: publicSchema,
     server: publicSchema.extend({
       devServer: z.object({ backendUrl: z.url() }),
+      limits: z
+        .array(z.tuple([z.string(), z.number()]))
+        .transform((entries) => new Map(entries)),
     }),
     build: z.object({
       msw: z.boolean().default(false),

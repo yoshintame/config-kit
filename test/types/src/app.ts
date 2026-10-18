@@ -19,5 +19,7 @@ serverConfig.devServer = { backendUrl: '' }
 buildConfig.msw = true
 // @ts-expect-error
 serverConfig.devServer.backendUrl = ''
+// @ts-expect-error
+const limits: Map<string, number> = serverConfig.limits
 
-export { backend, flag, msw, token, url }
+export { backend, flag, limits, msw, token, url }
