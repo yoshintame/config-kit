@@ -1,3 +1,10 @@
+## [0.3.4](https://github.com/yoshintame/config-kit/compare/v0.3.3...v0.3.4) (2026-10-18)
+
+
+### Bug Fixes
+
+* **types:** let SyncConfigSource.watch accept undefined ([e0e6873](https://github.com/yoshintame/config-kit/commit/e0e68737ac5c223ff1c28a2b766b2e60f61e6439))
+
 ## [0.3.3](https://github.com/yoshintame/config-kit/compare/v0.3.2...v0.3.3) (2026-10-18)
 
 
