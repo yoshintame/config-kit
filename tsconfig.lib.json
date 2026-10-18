@@ -5,5 +5,9 @@
     "isolatedDeclarations": true
   },
   "include": ["src", "client.d.ts"],
-  "exclude": ["src/**/*.test.ts", "src/vite/testing"]
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/core/test-sources.ts",
+    "src/vite/testing"
+  ]
 }

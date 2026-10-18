@@ -1,5 +1,6 @@
 import {
   createInMemorySource,
+  createSyncConfigLoader,
   defineConfigKit,
   resolveConfig,
 } from '@yoshintame/config-kit'
@@ -35,4 +36,9 @@ const definition = defineConfigKit({
   },
 })
 
-export { definition, resolved }
+const loader = createSyncConfigLoader(createInMemorySource({ apiUrl: '/api' }))
+const view: { readonly apiUrl: string } = loader.defineConfig(schema, {
+  name: undefined,
+})
+
+export { definition, resolved, view }
