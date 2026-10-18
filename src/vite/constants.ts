@@ -21,7 +21,7 @@ export interface ConfigModule {
   exportName: string
 }
 
-export const configModulesBySection = {
+export const configModulesBySection: Readonly<Record<Section, ConfigModule>> = {
   [Section.Public]: {
     id: PUBLIC_MODULE_ID,
     resolvedId: '\0config-kit:public',
@@ -37,7 +37,7 @@ export const configModulesBySection = {
     resolvedId: '\0config-kit:build',
     exportName: 'buildConfig',
   },
-} as const satisfies Record<Section, ConfigModule>
+}
 
 export function envPlaceholder(envVar: string): string {
   return `\${${envVar}}`

@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": true,
+    "isolatedDeclarations": true
+  },
+  "include": ["src", "client.d.ts"],
+  "exclude": ["src/**/*.test.ts", "src/vite/testing"]
+}

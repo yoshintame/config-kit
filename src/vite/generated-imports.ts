@@ -13,7 +13,7 @@ export function resolveGeneratedImport(
     pluginFile: string
     options: Parameters<Rollup.PluginContext['resolve']>[2]
   },
-) {
+): string | Promise<Rollup.ResolvedId | null> {
   return id === configPath
     ? id
     : context.resolve(id, pluginFile, { ...options, skipSelf: true })

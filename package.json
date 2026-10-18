@@ -61,7 +61,7 @@
   "scripts": {
     "build": "tsup && node scripts/add-client-types.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit && tsc -p test/types && tsc -p test/types/public-only",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.lib.json && tsc -p test/types && tsc -p test/types/public-only",
     "lint:package": "bun run build && publint --strict && attw --pack . --profile esm-only && tsc -p test/types/tsconfig.dist.json",
     "test:mutation": "stryker run",
     "prepack": "bun run build"

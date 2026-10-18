@@ -1,12 +1,15 @@
-import type { Parser } from '../core'
+import type * as node from './index'
 
-export const createFileSource = unavailable
-export const createProcessEnvSource = unavailable
-export const createYamlEnvSource = unavailable
-export const createYamlConfigLoader = unavailable
-export const createServerEnvSource = unavailable
-export const runValidator = unavailable
-export const yamlParser: Parser = { parse: unavailable }
+export const createFileSource: typeof node.createFileSource = unavailable
+export const createProcessEnvSource: typeof node.createProcessEnvSource =
+  unavailable
+export const createYamlEnvSource: typeof node.createYamlEnvSource = unavailable
+export const createYamlConfigLoader: typeof node.createYamlConfigLoader =
+  unavailable
+export const createServerEnvSource: typeof node.createServerEnvSource =
+  unavailable
+export const runValidator: typeof node.runValidator = unavailable
+export const yamlParser: typeof node.yamlParser = { parse: unavailable }
 
 function unavailable(): never {
   throw new Error(
