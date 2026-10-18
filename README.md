@@ -267,7 +267,7 @@ Without `onInvalid` the plugin shows the error text in `#root` (or `<body>`) and
 ```ts
 onInvalid(error, { kind, section, source, renderDefault }) {
   if (kind === 'placeholder') return localDefaults
-  void import('./src/config-error').then((m) => m.render(error))
+  return void import('./src/config-error').then((m) => m.render(error))
 }
 ```
 

@@ -20,6 +20,7 @@ const config = defineConfigKit({
   onInvalid(_error, { renderDefault, kind }) {
     if (kind === 'placeholder') return { backend: { apiUrl: '/api' } }
     renderDefault()
+    return
   },
   sensitive: ['build.token'],
 })
