@@ -19,7 +19,7 @@ export interface InvalidConfigContext {
   kind: `${ConfigErrorKind}`
   section: string
   source: string
-  renderDefault(): void
+  renderDefault: () => void
 }
 
 export interface DevOptions {
