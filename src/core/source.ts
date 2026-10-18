@@ -8,7 +8,7 @@ export interface RawConfig {
 export interface SyncConfigSource {
   loadSync(): RawConfig | undefined
   describe(): string
-  watch?(onChange: () => void): () => void
+  watch?: ((onChange: () => void) => () => void) | undefined
 }
 
 export type ConfigSource = SyncConfigSource

@@ -1,26 +1,63 @@
+import type { OptionalKeysOf } from 'type-fest'
 import { expectTypeOf, test } from 'vitest'
-import { z } from 'zod'
 
-import { createJsonScriptSource } from './browser'
-import { defineConfigKit } from './core'
-import { createProcessEnvSource, createYamlEnvSource } from './node'
-import { configKit, loadDevConfig } from './vite'
+import type { JsonScriptSourceOptions } from './browser'
+import type {
+  ConfigKitDefinition,
+  DefineConfigOptions,
+  DevOptions,
+  EnvVarNames,
+  ParseOptions,
+  ResolveSectionOptions,
+  SyncConfigSource,
+} from './core'
+import type {
+  ProcessEnvSourceOptions,
+  ValidatorOptions,
+  YamlEnvSourceOptions,
+} from './node'
+import type { ConfigKitOptions, loadDevConfig } from './vite'
 
-test('the entry options accept undefined in optional fields', () => {
-  const definition = defineConfigKit({ schemas: { public: z.object({}) } })
-  expectTypeOf(createJsonScriptSource).toBeCallableWith({
-    elementId: undefined,
-    placeholder: undefined,
-  })
-  expectTypeOf(createProcessEnvSource).toBeCallableWith({
-    envVar: 'APP_CONFIG',
-    parser: undefined,
-  })
-  expectTypeOf(createYamlEnvSource).toBeCallableWith({
-    envVar: 'APP_CONFIG',
-    yamlFile: 'config.yaml',
-    yamlPath: undefined,
-  })
-  expectTypeOf(configKit).toBeCallableWith({ configFile: undefined })
-  expectTypeOf(loadDevConfig).toBeCallableWith(definition, { root: undefined })
+type UndefinedInOptionalFields<T extends object> = {
+  [K in OptionalKeysOf<T>]?: undefined
+}
+
+type LoadDevConfigOptions = NonNullable<Parameters<typeof loadDevConfig>[1]>
+
+test('optional fields of the public types accept undefined', () => {
+  expectTypeOf<UndefinedInOptionalFields<ConfigKitDefinition>>().toExtend<
+    Pick<ConfigKitDefinition, OptionalKeysOf<ConfigKitDefinition>>
+  >()
+  expectTypeOf<UndefinedInOptionalFields<DevOptions>>().toExtend<DevOptions>()
+  expectTypeOf<UndefinedInOptionalFields<EnvVarNames>>().toExtend<EnvVarNames>()
+  expectTypeOf<
+    UndefinedInOptionalFields<DefineConfigOptions>
+  >().toExtend<DefineConfigOptions>()
+  expectTypeOf<
+    UndefinedInOptionalFields<ParseOptions>
+  >().toExtend<ParseOptions>()
+  expectTypeOf<UndefinedInOptionalFields<ResolveSectionOptions>>().toExtend<
+    Pick<ResolveSectionOptions, OptionalKeysOf<ResolveSectionOptions>>
+  >()
+  expectTypeOf<UndefinedInOptionalFields<SyncConfigSource>>().toExtend<
+    Pick<SyncConfigSource, OptionalKeysOf<SyncConfigSource>>
+  >()
+  expectTypeOf<
+    UndefinedInOptionalFields<JsonScriptSourceOptions>
+  >().toExtend<JsonScriptSourceOptions>()
+  expectTypeOf<UndefinedInOptionalFields<ProcessEnvSourceOptions>>().toExtend<
+    Pick<ProcessEnvSourceOptions, OptionalKeysOf<ProcessEnvSourceOptions>>
+  >()
+  expectTypeOf<UndefinedInOptionalFields<ValidatorOptions>>().toExtend<
+    Pick<ValidatorOptions, OptionalKeysOf<ValidatorOptions>>
+  >()
+  expectTypeOf<UndefinedInOptionalFields<YamlEnvSourceOptions>>().toExtend<
+    Pick<YamlEnvSourceOptions, OptionalKeysOf<YamlEnvSourceOptions>>
+  >()
+  expectTypeOf<
+    UndefinedInOptionalFields<ConfigKitOptions>
+  >().toExtend<ConfigKitOptions>()
+  expectTypeOf<
+    UndefinedInOptionalFields<LoadDevConfigOptions>
+  >().toExtend<LoadDevConfigOptions>()
 })
