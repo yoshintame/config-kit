@@ -1,5 +1,7 @@
 import type * as node from './index'
 
+export type * from './index'
+
 export const createFileSource: typeof node.createFileSource = unavailable
 export const createProcessEnvSource: typeof node.createProcessEnvSource =
   unavailable
