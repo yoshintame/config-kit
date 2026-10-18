@@ -1,6 +1,6 @@
 {
   "name": "@yoshintame/config-kit",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Lazy, Standard Schema-validated configuration with pluggable sources and a Vite plugin for runtime config injection",
   "license": "MIT",
   "author": "Mikhail Ivanov <m.ivanov0427@gmail.com>",

@@ -1,3 +1,14 @@
+## [0.3.2](https://github.com/yoshintame/config-kit/compare/v0.3.1...v0.3.2) (2026-10-18)
+
+
+### Bug Fixes
+
+* **types:** accept undefined in optional option fields ([a991117](https://github.com/yoshintame/config-kit/commit/a991117c7aec57e144589b10b16fe352f52aa75a))
+* **types:** give the browser stubs of /node the signatures of the node entry ([c3641c4](https://github.com/yoshintame/config-kit/commit/c3641c4b6a60b1bc7b7bb3536fdaa99365402bfc))
+* **types:** make the config types read-only at every depth ([8025488](https://github.com/yoshintame/config-kit/commit/8025488daf4a4d3fa875b80220d531d7409f717d))
+* **types:** re-export the node entry types from the browser stub ([2d0945c](https://github.com/yoshintame/config-kit/commit/2d0945c981d5df0a5548c859bac651513cb8e374))
+* **types:** type the config views as Readonly ([98ed24a](https://github.com/yoshintame/config-kit/commit/98ed24ae27c3c6e46a8f404a4aef39d6f9122b79))
+
 ## [0.3.1](https://github.com/yoshintame/config-kit/compare/v0.3.0...v0.3.1) (2026-10-18)
 
 
