@@ -1,3 +1,10 @@
+## [0.3.1](https://github.com/yoshintame/config-kit/compare/v0.3.0...v0.3.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **types:** declare renderDefault as a property of InvalidConfigContext ([608b025](https://github.com/yoshintame/config-kit/commit/608b025830b3fe32c82cbf6ab3200ecd14125810))
+
 # [0.3.0](https://github.com/yoshintame/config-kit/compare/v0.2.0...v0.3.0) (2026-09-28)
 
 
