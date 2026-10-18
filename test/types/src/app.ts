@@ -11,5 +11,11 @@ const backend: string = serverConfig.devServer.backendUrl
 publicConfig.devServer
 // @ts-expect-error
 buildConfig.nope
+// @ts-expect-error
+publicConfig.flag = true
+// @ts-expect-error
+serverConfig.devServer = { backendUrl: '' }
+// @ts-expect-error
+buildConfig.msw = true
 
 export { backend, flag, msw, token, url }

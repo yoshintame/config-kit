@@ -19,6 +19,7 @@ describe('liveConfig', () => {
   test('rejects writes', () => {
     const view = liveConfig({ data: {} }, { a: 1 })
     expect(() => {
+      // @ts-expect-error
       view.a = 2
     }).toThrow(TypeError)
   })

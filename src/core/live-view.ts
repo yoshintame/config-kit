@@ -5,7 +5,7 @@ export interface HotData {
 export function liveConfig<T extends object>(
   hot: HotData | undefined,
   value: T,
-): T {
+): Readonly<T> {
   if (!hot) return value
   const state = statesByHotData.get(hot.data) ?? { value }
   state.value = value
@@ -13,7 +13,7 @@ export function liveConfig<T extends object>(
   return liveView(state as { value: T })
 }
 
-export function liveView<T extends object>(state: { value: T }): T {
+export function liveView<T extends object>(state: { value: T }): Readonly<T> {
   return new Proxy({} as T, {
     get: (_target, prop) => Reflect.get(state.value, prop),
     has: (_target, prop) => Reflect.has(state.value, prop),

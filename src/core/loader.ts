@@ -14,7 +14,7 @@ export interface SyncConfigLoader {
   defineConfig<T extends ObjectSchema>(
     schema: T,
     options?: DefineConfigOptions,
-  ): StandardSchemaV1.InferOutput<T>
+  ): Readonly<StandardSchemaV1.InferOutput<T>>
   loadRaw(): unknown
   reset(): void
   onChange(cb: () => void): () => void
@@ -36,7 +36,7 @@ export function createSyncConfigLoader(
   function defineConfig<T extends ObjectSchema>(
     schema: T,
     { name }: DefineConfigOptions = {},
-  ): StandardSchemaV1.InferOutput<T> {
+  ): Readonly<StandardSchemaV1.InferOutput<T>> {
     let validated: { value: StandardSchemaV1.InferOutput<T> } | undefined
     resets.add(() => {
       validated = undefined
