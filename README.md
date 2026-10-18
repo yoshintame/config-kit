@@ -74,7 +74,7 @@ A source returns the raw config together with where it came from (`env APP_CONFI
 
 ### `createSyncConfigLoader(source)`
 
-- **`defineConfig(schema, { name? })`** returns a read-only proxy over the parsed output of an object schema. The first property access loads the source and validates; the result is cached. Writes and deletes throw. The type is read-only at every depth, as are `publicConfig`, `serverConfig` and `buildConfig`; at runtime the proxy rejects writes to top-level keys only.
+- **`defineConfig(schema, { name? })`** returns a read-only proxy over the parsed output of an object schema. The first property access loads the source and validates; the result is cached. Writes and deletes throw. Its type is read-only at every depth, and so are the types of `publicConfig`, `serverConfig` and `buildConfig`. At runtime only this proxy and the dev-server HMR views reject writes, and only to top-level keys; in a build the virtual modules export plain objects. Class instances from a schema (`z.instanceof`, a transform to `Decimal`) lose their private members in the read-only type and need a cast to be passed on as the class.
 - **`onChange(callback)`** subscribes to `source.watch`. On change the loader drops its caches before calling subscribers. Destructured values keep their old value.
 - **`loadRaw()`** returns the cached raw value without validation, `undefined` when the source is empty; **`reset()`** drops every cache.
 
