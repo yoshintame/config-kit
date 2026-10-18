@@ -92,7 +92,7 @@
     "@types/estree": "^1.0.9",
     "@types/node": "^22.15.32",
     "@valibot/to-json-schema": "^1.8.0",
-    "@yoshintame/ox-config": "0.2.0",
+    "@yoshintame/ox-config": "0.3.0",
     "arktype": "^2.2.5",
     "oxfmt": "^0.72.0",
     "oxlint": "^1.87.0",

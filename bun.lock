@@ -22,7 +22,7 @@
         "@types/estree": "^1.0.9",
         "@types/node": "^22.15.32",
         "@valibot/to-json-schema": "^1.8.0",
-        "@yoshintame/ox-config": "0.2.0",
+        "@yoshintame/ox-config": "0.3.0",
         "arktype": "^2.2.5",
         "oxfmt": "^0.72.0",
         "oxlint": "^1.87.0",
@@ -471,7 +471,7 @@
 
     "@vitest/utils": ["@vitest/utils@3.2.7", "", { "dependencies": { "@vitest/pretty-format": "3.2.7", "loupe": "^3.1.4", "tinyrainbow": "^2.0.0" } }, "sha512-x6BDOd7dyo3PFLY3I9/HJ25X/6OurhGXk2/B9gOZNPF7XDVjeBK4k01lQE5uvDpbuheErh91qYuE1E2OEjK3Rw=="],
 
-    "@yoshintame/ox-config": ["@yoshintame/ox-config@0.2.0", "", { "peerDependencies": { "oxfmt": ">=0.72.0 <1", "oxlint": "^1.87.0", "oxlint-tsgolint": "^7.0.2004" }, "optionalPeers": ["oxlint-tsgolint"] }, "sha512-x9pb/ETHXurg4yRK13UiBJcX0E0s+6iGhNnKAHSq9K5BXmBLoxtSNUkzNm2UU/HyTixp8m5oFXIb8JsmcYIJoQ=="],
+    "@yoshintame/ox-config": ["@yoshintame/ox-config@0.3.0", "", { "peerDependencies": { "oxfmt": ">=0.72.0 <1", "oxlint": "^1.87.0", "oxlint-tsgolint": "^7.0.2004" }, "optionalPeers": ["oxlint-tsgolint"] }, "sha512-xKJVvLoJPqVjVrCzKkUWrPzhX3t2YG0VDyCVo5SDUrfM5rJm19bxEb/c6q+NFWD6gKtXcx2iu6btBrYgOkZo7Q=="],
 
     "acorn": ["acorn@8.18.0", "", { "bin": { "acorn": "bin/acorn" } }, "sha512-lGq+9yr1/GuAWaVYIHRjvvySG5/4VfKIvC8EWxStPdcDh/Ka7FG3twP6v4d5BkravUilhIAsG4Qj83t02LWUPQ=="],
 
