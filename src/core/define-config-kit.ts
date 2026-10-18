@@ -1,4 +1,5 @@
-import type { DeepReadonly } from './deep-readonly'
+import type { ReadonlyDeep } from 'type-fest'
+
 import type { ConfigErrorKind, ConfigKitError } from './errors'
 import type { ObjectSchema } from './loader'
 import type { UnknownKeys } from './parse-or-throw'
@@ -70,14 +71,14 @@ export function defineConfigKit<S extends ConfigKitSchemas>(
 // oxlint-disable-next-line typescript/no-empty-object-type -- the app augments it with its config
 export interface Register {}
 
-export type PublicConfig = DeepReadonly<
+export type PublicConfig = ReadonlyDeep<
   StandardSchemaV1.InferOutput<RegisteredSchemas['public']>
 >
 
-export type ServerConfig = DeepReadonly<ServerConfigOf<RegisteredSchemas>>
+export type ServerConfig = ReadonlyDeep<ServerConfigOf<RegisteredSchemas>>
 
 // oxlint-disable-next-line typescript/no-generated-empty-object-type -- without a build schema the build config has no keys
-export type BuildConfig = DeepReadonly<BuildOutput>
+export type BuildConfig = ReadonlyDeep<BuildOutput>
 
 export type ServerConfigOf<S extends ConfigKitSchemas> = OutputOr<
   SchemaAt<S, Section.Server>,

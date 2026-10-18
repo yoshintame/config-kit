@@ -1,4 +1,4 @@
-import type { DeepReadonly } from './deep-readonly'
+import type { ReadonlyDeep } from 'type-fest'
 
 export interface HotData {
   data: Record<string, unknown>
@@ -7,8 +7,8 @@ export interface HotData {
 export function liveConfig<T extends object>(
   hot: HotData | undefined,
   value: T,
-): DeepReadonly<T> {
-  if (!hot) return value as DeepReadonly<T>
+): ReadonlyDeep<T> {
+  if (!hot) return value as ReadonlyDeep<T>
   const state = statesByHotData.get(hot.data) ?? { value }
   state.value = value
   statesByHotData.set(hot.data, state)
@@ -17,8 +17,8 @@ export function liveConfig<T extends object>(
 
 export function liveView<T extends object>(state: {
   value: T
-}): DeepReadonly<T> {
-  return new Proxy({} as DeepReadonly<T>, {
+}): ReadonlyDeep<T> {
+  return new Proxy({} as ReadonlyDeep<T>, {
     get: (_target, prop) => Reflect.get(state.value, prop),
     has: (_target, prop) => Reflect.has(state.value, prop),
     ownKeys: () => Reflect.ownKeys(state.value),

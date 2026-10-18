@@ -1,4 +1,5 @@
-import type { DeepReadonly } from './deep-readonly'
+import type { ReadonlyDeep } from 'type-fest'
+
 import { liveView } from './live-view'
 import { parseOrThrow } from './parse-or-throw'
 import { ensureLoaded } from './require-config'
@@ -15,7 +16,7 @@ export interface SyncConfigLoader {
   defineConfig<T extends ObjectSchema>(
     schema: T,
     options?: DefineConfigOptions,
-  ): DeepReadonly<StandardSchemaV1.InferOutput<T>>
+  ): ReadonlyDeep<StandardSchemaV1.InferOutput<T>>
   loadRaw(): unknown
   reset(): void
   onChange(cb: () => void): () => void
@@ -37,7 +38,7 @@ export function createSyncConfigLoader(
   function defineConfig<T extends ObjectSchema>(
     schema: T,
     { name }: DefineConfigOptions = {},
-  ): DeepReadonly<StandardSchemaV1.InferOutput<T>> {
+  ): ReadonlyDeep<StandardSchemaV1.InferOutput<T>> {
     let validated: { value: StandardSchemaV1.InferOutput<T> } | undefined
     resets.add(() => {
       validated = undefined
