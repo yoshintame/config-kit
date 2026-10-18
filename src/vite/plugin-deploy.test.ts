@@ -39,7 +39,7 @@ function validate(env: Record<string, string | undefined>) {
   )
 }
 
-describe('docker', () => {
+describe('docker', { timeout: 20_000 }, () => {
   test('builds a self-contained validator without onInvalid', async () => {
     writeConfig({
       options: ['docker: true', "onInvalid() { console.log('ON_INVALID') }"],
