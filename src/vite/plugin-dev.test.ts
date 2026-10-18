@@ -101,7 +101,7 @@ describe('dev', () => {
   })
 
   test('env var wins over yaml', async () => {
-    process.env.APP_PUBLIC_CONFIG = JSON.stringify({
+    process.env['APP_PUBLIC_CONFIG'] = JSON.stringify({
       backend: { apiUrl: 'https://api.env' },
     })
     const dev = await startDev()
@@ -111,7 +111,7 @@ describe('dev', () => {
   })
 
   test('an empty env var is a value, not a fallback to yaml', async () => {
-    process.env.APP_PUBLIC_CONFIG = ''
+    process.env['APP_PUBLIC_CONFIG'] = ''
     await expect(startDev()).rejects.toThrow(
       /Failed to parse env APP_PUBLIC_CONFIG/,
     )
@@ -140,7 +140,9 @@ describe('dev', () => {
   })
 
   test('private env var wins over yaml private section', async () => {
-    process.env.APP_PRIVATE_CONFIG = JSON.stringify({ db: { url: 'from-env' } })
+    process.env['APP_PRIVATE_CONFIG'] = JSON.stringify({
+      db: { url: 'from-env' },
+    })
     const dev = await startDev()
     expect(
       (await loadModule(dev, 'virtual:config-kit/private')).serverConfig,
@@ -164,7 +166,7 @@ describe('dev', () => {
   test('runs from env var alone without config.yaml', async () => {
     writeConfig({ schemas: [] })
     rmSync(yamlPath)
-    process.env.APP_PUBLIC_CONFIG = JSON.stringify({
+    process.env['APP_PUBLIC_CONFIG'] = JSON.stringify({
       backend: { apiUrl: 'https://api.env' },
     })
     const dev = await startDev()

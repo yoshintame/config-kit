@@ -160,8 +160,8 @@ export function useFixture(): void {
     )
     writeConfig()
     writeYaml('https://api.local')
-    delete process.env.APP_PUBLIC_CONFIG
-    delete process.env.APP_PRIVATE_CONFIG
+    delete process.env['APP_PUBLIC_CONFIG']
+    delete process.env['APP_PRIVATE_CONFIG']
   })
 
   afterEach(async () => {
@@ -169,8 +169,8 @@ export function useFixture(): void {
     server = undefined
     vi.restoreAllMocks()
     vi.unstubAllEnvs()
-    delete process.env.APP_PUBLIC_CONFIG
-    delete process.env.APP_PRIVATE_CONFIG
+    delete process.env['APP_PUBLIC_CONFIG']
+    delete process.env['APP_PRIVATE_CONFIG']
     rmSync(root, { recursive: true, force: true })
   })
 }

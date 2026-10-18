@@ -185,7 +185,7 @@ function assertDefinition(
   value: unknown,
   file: string,
 ): asserts value is ConfigKitDefinition {
-  const schemas: unknown = isPlainObject(value) ? value.schemas : undefined
+  const schemas: unknown = isPlainObject(value) ? value['schemas'] : undefined
   if (!isPlainObject(schemas)) {
     throw new Error(`${file} must default-export defineConfigKit({ schemas })`)
   }
@@ -196,7 +196,7 @@ function assertDefinition(
     invalid.length > 0
       ? `${invalid.join(', ')} is not a Standard Schema (Zod, Valibot, ArkType)`
       : undefined,
-    isNil(schemas.public) ? 'schemas.public is required' : undefined,
+    isNil(schemas['public']) ? 'schemas.public is required' : undefined,
   ].filter(isNotNil)
   if (problems.length > 0) throw new Error(`${file}: ${problems.join('; ')}`)
 }

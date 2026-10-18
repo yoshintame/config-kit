@@ -6,7 +6,19 @@ import { isPlainObject } from 'es-toolkit'
 
 export type { StandardSchemaV1 }
 
-export type JsonSchema = Record<string, unknown>
+export interface JsonSchema {
+  [key: string]: unknown
+  $ref?: unknown
+  $id?: unknown
+  title?: unknown
+  description?: unknown
+  properties?: unknown
+  anyOf?: unknown
+  oneOf?: unknown
+  allOf?: unknown
+  additionalProperties?: unknown
+  patternProperties?: unknown
+}
 
 export enum JsonSchemaIo {
   Input = 'input',

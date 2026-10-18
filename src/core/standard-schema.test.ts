@@ -167,7 +167,7 @@ describe('objectProperties', () => {
       nested: z.object({ token: z.string().optional() }).nullable(),
     })
     const root = jsonSchemaOf(schema, JsonSchemaIo.Output)!
-    const nested = objectProperties(root)?.nested
+    const nested = objectProperties(root)?.['nested']
     expect(Object.keys(objectProperties(nested!, root) ?? {})).toEqual([
       'token',
     ])

@@ -26,5 +26,5 @@ export function toEnum<E extends Record<string, string>>(
 }
 
 export function isAstNode(value: unknown): value is Node {
-  return isPlainObject(value) ? typeof value.type === 'string' : false
+  return isPlainObject(value) ? typeof value['type'] === 'string' : false
 }

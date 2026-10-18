@@ -34,7 +34,7 @@ function validate(env: Record<string, string | undefined>) {
     {
       encoding: 'utf-8',
       cwd: tmpdir(),
-      env: { PATH: process.env.PATH, ...env },
+      env: { PATH: process.env['PATH'], ...env },
     },
   )
 }
@@ -102,7 +102,7 @@ describe('docker', { timeout: 20_000 }, () => {
       const start = (config: string | undefined) =>
         spawnSync('sh', [hook], {
           encoding: 'utf-8',
-          env: { PATH: process.env.PATH, APP_PUBLIC_CONFIG: config },
+          env: { PATH: process.env['PATH'], APP_PUBLIC_CONFIG: config },
         })
 
       expect(start('{"html":"</script><b>"}').status).toBe(0)
@@ -164,8 +164,13 @@ describe('ssr build', () => {
       'Config not found in env APP_PUBLIC_CONFIG',
     )
 
-    process.env.APP_PUBLIC_CONFIG = JSON.stringify({ a: 1, db: { host: 'h' } })
-    process.env.APP_PRIVATE_CONFIG = JSON.stringify({ db: { password: 'p' } })
+    process.env['APP_PUBLIC_CONFIG'] = JSON.stringify({
+      a: 1,
+      db: { host: 'h' },
+    })
+    process.env['APP_PRIVATE_CONFIG'] = JSON.stringify({
+      db: { password: 'p' },
+    })
     const mod = (await import(`${url}?set`)) as ConfigModule
     expect(mod.publicConfig).toEqual({ a: 1, db: { host: 'h' } })
     expect(mod.serverConfig).toEqual({
