@@ -15,6 +15,7 @@ import {
   envPlaceholder,
   PACKAGE_NAME,
 } from './constants'
+import { parseDevOverrides, SET_FLAG } from './dev-overrides'
 import {
   createDevReader,
   type DevReader,
@@ -121,11 +122,18 @@ export function configKit({ configFile }: ConfigKitOptions = {}): Plugin {
             failed: false,
           }
         })
-        .with('build', () => ({
-          command: 'build',
-          buildConfig: loadBuildConfig(loaded.settings),
-          secrets: collectSecrets(loaded.settings, root),
-        }))
+        .with('build', () => {
+          if (parseDevOverrides(process.argv).length > 0) {
+            throw new Error(
+              `config-kit: ${SET_FLAG} applies to vite serve only, set build values in vite build through env ${loaded.settings.envVars.build}`,
+            )
+          }
+          return {
+            command: 'build',
+            buildConfig: loadBuildConfig(loaded.settings),
+            secrets: collectSecrets(loaded.settings, root),
+          }
+        })
         .exhaustive()
       return {
         optimizeDeps: {

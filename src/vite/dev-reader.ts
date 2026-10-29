@@ -6,6 +6,7 @@ import { findUpSync } from 'find-up'
 import { match, P } from 'ts-pattern'
 
 import {
+  type BuildConfigOf,
   type ConfigKitDefinition,
   type ConfigKitSchemas,
   createInMemorySource,
@@ -22,6 +23,11 @@ import { schemaFor } from '../core/resolve-config'
 import { createFileSource, createProcessEnvSource, yamlParser } from '../node'
 import { type ConfigKitSettings, resolveSettings } from './config-file'
 import { YamlSection } from './constants'
+import {
+  type DevOverride,
+  devOverrideSource,
+  parseDevOverrides,
+} from './dev-overrides'
 
 export interface DevState {
   public: RawConfig
@@ -38,29 +44,52 @@ export interface DevReader {
 
 type Warn = (message: string) => void
 
+export interface DevReaderOptions {
+  warn?: Warn | undefined
+  overrides?: readonly DevOverride[] | undefined
+}
+
+export interface LoadDevConfigOptions {
+  root?: string | undefined
+}
+
 export function loadDevConfig<S extends ConfigKitSchemas>(
   definition: ConfigKitDefinition<S>,
-  { root = process.cwd() }: { root?: string | undefined } = {},
+  { root = process.cwd() }: LoadDevConfigOptions = {},
 ): ServerConfigOf<S> {
   return createDevReader(resolveSettings(definition), root).load()
     .serverConfig as ServerConfigOf<S>
 }
 
+export function loadDevBuildConfig<S extends ConfigKitSchemas>(
+  definition: ConfigKitDefinition<S>,
+  { root = process.cwd() }: LoadDevConfigOptions = {},
+): BuildConfigOf<S> {
+  return createDevReader(resolveSettings(definition), root).load()
+    .buildConfig as BuildConfigOf<S>
+}
+
 export function createDevReader(
   settings: ConfigKitSettings,
   root: string,
-  warn: Warn = console.warn,
+  {
+    warn = console.warn,
+    overrides = parseDevOverrides(process.argv),
+  }: DevReaderOptions = {},
 ): DevReader {
   const { yaml, watchedFiles } = yamlSource(settings, root)
   const { envVars } = settings
 
   function load(): DevState {
     const document = yamlDocument(yaml)
-    const sectionSource = (section: YamlSection, envVar: string) =>
-      firstNonEmpty([
+    const sectionSource = (section: YamlSection, envVar: string) => {
+      const base = firstNonEmpty([
         createProcessEnvSource({ envVar }),
         yamlSectionSource(document, section),
       ])
+      const patch = devOverrideSource(overrides, section)
+      return patch ? mergeAll([base, patch]) : base
+    }
     const publicSource = sectionSource(YamlSection.Public, envVars.public)
     const serverSource = mergeAll([
       publicSource,

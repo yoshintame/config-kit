@@ -11,6 +11,7 @@ export {
   Section,
   type SensitivePath,
   type ServerConfig,
+  type BuildConfigOf,
   type ServerConfigOf,
 } from './define-config-kit'
 export {

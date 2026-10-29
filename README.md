@@ -191,7 +191,7 @@ export default defineConfig(({ command }) => {
 })
 ```
 
-The plugin finds `config-kit.config.ts` in the Vite root; `configKit({ configFile })` points it elsewhere. `loadDevConfig(config, { root? })` reads the same files as the dev server and returns the validated server config, typed from the schemas. It searches from `process.cwd()`; pass `root` when `vite.config` sets a different Vite root.
+The plugin finds `config-kit.config.ts` in the Vite root; `configKit({ configFile })` points it elsewhere. `loadDevConfig(config, { root? })` reads the same files as the dev server and returns the validated server config, typed from the schemas. It searches from `process.cwd()`; pass `root` when `vite.config` sets a different Vite root. `loadDevBuildConfig(config, { root? })` returns the dev build section the same way, for checks in `vite.config` such as refusing to expose a dev token.
 
 | Option           | Default                                                       | Meaning                                                                                                                  |
 | ---------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -233,6 +233,16 @@ In dev the plugin reads `config.yaml` (found upward from the Vite root), deep-me
 - `build`: `APP_BUILD_CONFIG` overrides it. Dev only: `vite build` ignores the section and takes `APP_BUILD_CONFIG` over the schema defaults, so a committed dev file never sets production flags.
 
 Any other top-level section is an error.
+
+#### Overrides from the command line
+
+`--set <section>.<path>=<value>` after `--` patches one field on top of every layer above, so one checkout can run several dev servers in different modes without touching a file:
+
+```sh
+vite --host -- --set build.msw=true --set build.impersonation.actAs=e2e-manager
+```
+
+End the package script with `--` (`"dev": "vite --host --"`) and pass the flags straight through: `bun run dev --set build.msw=true`. The section is `public`, `private` or `build`; the value is read as a YAML scalar (`true`, `3`, `null`, or text), and an empty value is an empty string. Overrides deep-merge into their section and show up in error sources (`file config.yaml (build) + --set build.msw=true`). They apply to `vite serve`, `loadDevConfig` and `loadDevBuildConfig`; `vite build` refuses them, set build values there through `APP_BUILD_CONFIG`.
 
 ### Virtual modules
 

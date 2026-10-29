@@ -8,7 +8,12 @@ import { z } from 'zod'
 
 import type { ConfigKitDefinition, ConfigKitSchemas } from '../core'
 import { resolveSettings } from './config-file'
-import { createDevReader, loadBuildConfig } from './dev-reader'
+import { parseDevOverrides } from './dev-overrides'
+import {
+  createDevReader,
+  loadBuildConfig,
+  loadDevBuildConfig,
+} from './dev-reader'
 
 const schemas = { public: z.looseObject({}) }
 
@@ -217,4 +222,79 @@ describe('resolveSettings', () => {
       "'public': checking unknown keys needs a schema with ~standard.jsonSchema",
     )
   })
+})
+
+function withOverrides(...assignments: string[]) {
+  return createDevReader(
+    resolveSettings({
+      schemas: {
+        public: z.object({ a: z.number(), b: z.number().optional() }),
+        build: z.object({
+          msw: z.boolean().default(false),
+          nested: z
+            .object({ x: z.string().optional(), y: z.string().optional() })
+            .prefault({}),
+        }),
+      },
+      unknownKeys: 'ignore',
+    }),
+    root,
+    {
+      overrides: parseDevOverrides([
+        '--',
+        ...assignments.flatMap((assignment) => ['--set', assignment]),
+      ]),
+    },
+  )
+}
+
+describe('--set overrides', () => {
+  test('patch the yaml section without replacing it', () => {
+    writeFileSync(
+      join(root, 'config.yaml'),
+      'public:\n  a: 1\nbuild:\n  nested:\n    x: keep\n',
+    )
+    const state = withOverrides('build.msw=true', 'build.nested.y=new').load()
+    expect(state.buildConfig).toEqual({
+      msw: true,
+      nested: { x: 'keep', y: 'new' },
+    })
+  })
+
+  test('win over the env var and name themselves in errors', () => {
+    vi.stubEnv('APP_PUBLIC_CONFIG', JSON.stringify({ a: 1, b: 2 }))
+    expect(withOverrides('public.b=3').load().public.raw).toEqual({
+      a: 1,
+      b: 3,
+    })
+    expect(() => withOverrides('public.a=text').load()).toThrow(
+      /loaded from env APP_PUBLIC_CONFIG \+ --set public\.a=text/,
+    )
+  })
+
+  test('reach the server view through public and private', () => {
+    expect(withOverrides('private.extra=1').load().server.raw).toEqual({
+      a: 1,
+      secret: 's',
+      extra: 1,
+    })
+  })
+})
+
+test('loadDevBuildConfig returns the validated dev build section', () => {
+  writeFileSync(
+    join(root, 'config.yaml'),
+    'public:\n  a: 1\nbuild:\n  msw: true\n',
+  )
+  expect(
+    loadDevBuildConfig(
+      {
+        schemas: {
+          public: z.looseObject({}),
+          build: z.object({ msw: z.boolean(), token: z.string().optional() }),
+        },
+      },
+      { root },
+    ),
+  ).toEqual({ msw: true })
 })

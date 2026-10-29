@@ -96,6 +96,18 @@ describe('build section', () => {
   })
 })
 
+test('rejects --set in vite build', async () => {
+  vi.spyOn(process, 'argv', 'get').mockReturnValue([
+    'node',
+    'vite',
+    'build',
+    '--',
+    '--set',
+    'build.devtools=true',
+  ])
+  await expect(runBuild()).rejects.toThrow('--set applies to vite serve only')
+})
+
 describe('sensitive', () => {
   beforeEach(() =>
     writeConfig({

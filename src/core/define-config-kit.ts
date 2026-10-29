@@ -85,12 +85,14 @@ export type ServerConfigOf<S extends ConfigKitSchemas> = OutputOr<
   StandardSchemaV1.InferOutput<S['public']>
 >
 
-// oxlint-disable-next-line typescript/no-generated-empty-object-type -- see BuildConfig
-type BuildOutput = OutputOr<
-  SchemaAt<RegisteredSchemas, Section.Build>,
+export type BuildConfigOf<S extends ConfigKitSchemas> = OutputOr<
+  SchemaAt<S, Section.Build>,
   // oxlint-disable-next-line typescript/no-generated-empty-object-type -- see BuildConfig
   Record<never, never>
 >
+
+// oxlint-disable-next-line typescript/no-generated-empty-object-type -- see BuildConfig
+type BuildOutput = BuildConfigOf<RegisteredSchemas>
 
 type RegisteredSchemas = Register extends {
   config: { schemas: infer S extends ConfigKitSchemas }
