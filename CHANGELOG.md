@@ -1,3 +1,10 @@
+# [0.4.0](https://github.com/yoshintame/config-kit/compare/v0.3.4...v0.4.0) (2026-10-29)
+
+
+### Features
+
+* **vite:** dev overrides from the command line and loadDevBuildConfig ([74c67d1](https://github.com/yoshintame/config-kit/commit/74c67d17b8ffc2253645298115236315ef789b66))
+
 ## [0.3.4](https://github.com/yoshintame/config-kit/compare/v0.3.3...v0.3.4) (2026-10-18)
 
 
