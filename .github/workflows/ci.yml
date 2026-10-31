@@ -13,14 +13,14 @@ concurrency:
 
 jobs:
   verify:
-    uses: yoshintame/workflows/.github/workflows/ci.yml@fc18ec71da63534238805989c57806ce35e879be # v1.1.2
+    uses: yoshintame/workflows/.github/workflows/ci.yml@a2dd939289d450e122f98ce19f3ccca6e58c4654 # v1.3.0
     permissions:
       contents: read
 
   release:
     needs: verify
     if: github.event_name == 'push'
-    uses: yoshintame/workflows/.github/workflows/release-semantic.yml@fc18ec71da63534238805989c57806ce35e879be # v1.1.2
+    uses: yoshintame/workflows/.github/workflows/release-semantic.yml@a2dd939289d450e122f98ce19f3ccca6e58c4654 # v1.3.0
     permissions:
       contents: write
       issues: write
